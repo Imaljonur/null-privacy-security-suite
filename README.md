@@ -19,6 +19,19 @@ This suite was built as **digital self-defense**:
 
 I don't want to choose between *"USA or China controlling my data"* — I want to keep it **myself**.
 
+
+
+**Platform & Development Notes**  
+Currently, the Null Privacy Security Suite has only been tested on **Windows 11**.  
+However, the architecture is designed to also be **Linux-compatible**, and community testing is welcome.  
+
+This project was built **entirely by a single individual**, without sponsors or companies in the background.  
+It was born out of frustration with the ever‑growing **surveillance apparatus**, the forced online account requirements of major cloud service providers, and the systematic **misuse of personal data** for advertising and sales.  
+The Null Suite is intended to counter this trend, **regain control over one’s own data**, and block intrusive monitoring.  
+
+There will **never** be a backdoor — and that is exactly why this software is **open source**.
+
+
 ---
 
 ## Key Features
@@ -141,6 +154,5 @@ Onion-based, password‑derived encryption (XChaCha20/Argon2id) + PFS per sessio
 For questions, suggestions, or **responsible disclosure** of security issues, please email **imaljonur@protonmail.com**.
 
 _Note:_ I'm not online 24/7 — I'll reply when I can.
-
 
 
