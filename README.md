@@ -161,14 +161,3 @@ _Note:_ I'm not online 24/7 — I'll reply when I can.
 
 
 
-## 📸 Screenshots
-![null_sentinel.jpg](docs/screenshots/null_sentinel.jpg)
-
-![null_ai_watchdog.jpg](docs/screenshots/null_ai_watchdog.jpg)
-
-![null_nullsearch.jpg](docs/screenshots/null_nullsearch.jpg)
-
-![null_inspector.jpg](docs/screenshots/null_inspector.jpg)
-
-![null_messenger.jpg](docs/screenshots/null_messenger.jpg)
-
