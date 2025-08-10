@@ -1,0 +1,23 @@
+# Core dependencies
+PyNaCl
+PySocks
+argon2-cffi
+beautifulsoup4
+cryptography
+customtkinter
+dnspython
+httpx
+mmh3
+psutil
+requests
+scapy
+watchdog
+
+# Optional (enable advanced analytics, screenshots, tray icon)
+# joblib
+# lightgbm
+# numpy
+# pandas
+# pillow
+# pystray
+# scikit-learn
