@@ -102,23 +102,6 @@ MIT License — see LICENSE file for details.
 
 ---
 
-## Screenshots
-
-### Sentinel (Main Monitoring Hub)
-![Sentinel](docs/Null_sentinel.jpg)
-
-### AI Watchdog
-![AI Watchdog](docs/Null_ai_watchdog.jpg)
-
-### NullSearch (TOR-enabled search tool)
-![NullSearch](docs/Null_nullsearch.jpg)
-
-### Network Scanner / Inspector
-![Null Scanner](docs/Null_scanner_inspector.jpg)
-
-### Null Messenger (Encrypted P2P Chat)
-![Null Messenger](docs/Null_messenger.jpg)
-
 # Screenshots
 
 Below is a quick tour of the main modules. All run locally with a consistent dark/green UI.
