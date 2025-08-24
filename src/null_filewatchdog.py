@@ -1,13 +1,13 @@
 
 LABELS = {
     "TITLE": "∅ File Watchdog",
-    "SUB": "Watch folders & log events",
+    "SUB": "Monitor folders & log events",
     "ADD_FOLDER": "Add folder",
     "CLEAR_LOG": "Clear log",
     "ACTIONS": "Actions",
     "DELETE": "Delete",
     "DETAILS": "Details",
-    "NOTE": "Tip: Click a line in the log to mark/select its file.",
+    "NOTE": "Tip: Click a row in the log list to select the file.",
     "STATUS": "Status",
     "MET_PATHS": "Watched folders",
     "MET_EVENTS": "Events",
@@ -24,10 +24,10 @@ LABELS = {
     "MOD_AT": "Modified",
     "ERR": "Error",
     "ERR_WATCH": "Could not watch folder.",
-    "ERR_SELECT": "Selection error:",
-    "ERR_DELETE": "Delete error:",
-    "ERR_START": "Could not start observer.",
-    "NO_FILE": "No file selected or it does not exist.",
+    "ERR_SELECT": "Error beim Auswählen:",
+    "ERR_DELETE": "Error beim Delete:",
+    "ERR_START": "Observer could not be started.",
+    "NO_FILE": "No file selected or file does not exist.",
     "PREFIXES": ["[NEW]", "[MODIFIED]", "[DELETED]", "[Watching]", "[Selected]"],
 }
 
@@ -38,6 +38,23 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from tkinter import filedialog, messagebox
 import threading
+
+# ---- Sentinel UDP (realtime, no GUI changes) ----
+import os, json, socket
+from datetime import datetime, timezone
+
+SENT_HOST = os.environ.get("NULL_SENTINEL_HOST", "127.0.0.1")
+SENT_PORT = int(os.environ.get("NULL_SENTINEL_PORT", "5140"))
+_SENT_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def _utcnow_iso():
+    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+def sentinel(ev: dict):
+    try:
+        _SENT_SOCK.sendto(json.dumps(ev, ensure_ascii=False).encode("utf-8"), (SENT_HOST, SENT_PORT))
+    except Exception:
+        pass
 
 ACCENT        = "#00FF88"
 BG_DARK       = "#0B0F10"
@@ -67,10 +84,28 @@ class FileEventHandler(FileSystemEventHandler):
         if event.is_directory: return
         self.log(f"{self.L['MOD']} {event.src_path}", "orange")
 
+        sentinel({
+            "ts": _utcnow_iso(),
+            "tool": "filewatchdog",
+            "level": "warn",
+            "host": "",
+            "pid": 0,
+            "msg": f"file modified: {event.src_path}",
+            "labels": {"file": event.src_path, "action": "modified"}
+        })
     def on_deleted(self, event):
         if event.is_directory: return
         self.log(f"{self.L['DEL']} {event.src_path}", "red")
 
+        sentinel({
+            "ts": _utcnow_iso(),
+            "tool": "filewatchdog",
+            "level": "info",
+            "host": "",
+            "pid": 0,
+            "msg": f"file deleted: {event.src_path}",
+            "labels": {"file": event.src_path, "action": "deleted"}
+        })
 class FileWatcherApp(ctk.CTk):
     def __init__(self, labels):
         super().__init__()

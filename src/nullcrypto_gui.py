@@ -1,6 +1,3 @@
-# nullcrypto_gui_en.py
-# ∅ nullcrypto — CustomTkinter GUI (Nullsearch Dark/Green Style)
-# Standalone file. No logic changes vs. original core crypto. All UI strings and comments in English.
 
 import os
 import base64
@@ -22,8 +19,8 @@ from argon2.low_level import hash_secret_raw, Type
 SALT_SIZE = 16
 NONCE_SIZE = 24
 KEY_SIZE = 32
-HEADER = b"OC2X"   # format identifier
-TEXT_PREFIX = "OCRYPTO:"  # legacy marker (optional)
+HEADER = b"OC2X"   # Formatkennung
+TEXT_PREFIX = "OCRYPTO:"  # historischer Marker (optional)
 
 # ==========================
 #  KDF PRESETS (UNCHANGED)
@@ -142,7 +139,7 @@ def decrypt_file(in_path: str, out_path: Optional[str], password: str, aad_text:
     return out_path
 
 # ==================================================================
-#  GUI ONLY — Nullsearch Dark/Green Layout (NO LOGIC CHANGES)
+#  NEW GUI ONLY — Nullsearch Dark/Green Layout (NO LOGIC CHANGES)
 # ==================================================================
 # Palette
 ACCENT        = "#00FF88"
@@ -246,7 +243,7 @@ class NullCryptoGUI(ctk.CTk):
         self.kdf.grid(row=0, column=3, padx=6, pady=6, sticky="ew")
 
         _lbl(top, "AAD (optional)").grid(row=0, column=4, padx=6, pady=6, sticky="e")
-        self.aad = ctk.CTkEntry(top, placeholder_text="e.g., filename or tag")
+        self.aad = ctk.CTkEntry(top, placeholder_text="e.g. filename or tag")
         self.aad.grid(row=0, column=5, padx=6, pady=6, sticky="ew")
 
         self.prefix_var = ctk.BooleanVar(value=False)

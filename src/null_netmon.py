@@ -10,6 +10,23 @@ import os
 from collections import defaultdict
 import customtkinter as ctk
 
+# ---- Sentinel UDP (realtime, no GUI changes) ----
+import os, json, socket
+from datetime import datetime, timezone
+
+SENT_HOST = os.environ.get("NULL_SENTINEL_HOST", "127.0.0.1")
+SENT_PORT = int(os.environ.get("NULL_SENTINEL_PORT", "5140"))
+_SENT_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def _utcnow_iso():
+    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+def sentinel(ev: dict):
+    try:
+        _SENT_SOCK.sendto(json.dumps(ev, ensure_ascii=False).encode("utf-8"), (SENT_HOST, SENT_PORT))
+    except Exception:
+        pass
+
 try:
     import requests
 except ImportError:
@@ -56,11 +73,11 @@ def ai_threat_check(proc, rip, country, port, data_sent, org, conn_counts, warn_
         return
     conn_counts[rip] += 1
     if conn_counts[rip] > 20:
-        messages.append(f"[AI] 🧠 Possible port scan: {conn_counts[rip]} Verbindungen nach {rip} durch {proc}")
+        messages.append(f"[AI] 🧠 Possible port scan: {conn_counts[rip]} connections to {rip} by {proc}")
     if country == "?" and org == "?" and not rip.startswith("192.168"):
         messages.append(f"[AI] ❓ Target anonymous & unknown: {rip} von {proc}")
     if proc.lower() in SUSPICIOUS_PROCESSES and data_sent != "-" and isinstance(data_sent, int) and data_sent > 10**7:
-        messages.append(f"[AI] 🔥 Unusual traffic: {proc} sendet {round(data_sent/1_000_000,1)} MB")
+        messages.append(f"[AI] 🔥 Unusual traffic: {proc} is sending {round(data_sent/1_000_000,1)} MB")
     for msg in messages:
         warn_output.configure(text=msg)
 
@@ -165,7 +182,7 @@ def update_connections(tree, warn_label, interval_var, warn_output):
         rows.sort()
         for row in rows:
             tree.insert("", "end", values=row, tags=("warn",) if any(x in row[0] for x in "⚠️🧠🔥") else ())
-        warn_label.configure(text=f"⚠️ Suspicious activity: {suspicious_count}")
+        warn_label.configure(text=f"⚠️ Suspicious activities: {suspicious_count}")
         time.sleep(refresh_interval)
 
 def export_csv():
@@ -236,7 +253,7 @@ def main():
     header = ctk.CTkFrame(main_card, fg_color=BG_CARD)
     header.grid(row=0, column=0, sticky="ew", padx=12, pady=(12,6))
     header.grid_columnconfigure(0, weight=1)
-    warn_label = _label(header, "⚠️ Suspicious activity: 0", muted=True)
+    warn_label = _label(header, "⚠️ Suspicious activities: 0", muted=True)
     warn_label.grid(row=0, column=0, sticky="w")
 
     # Body with tree
@@ -256,7 +273,7 @@ def main():
                     background=BG_CARD, foreground=ACCENT,
                     font=("Consolas", 10, "bold"))
 
-    columns = ("Program", "Local address", "Remote address", "Domain", "Geo / Provider", "Status", "Traffic(Bytes)")
+    columns = ("Program", "Locale Adresse", "Remoteadresse", "Domain", "Geo / Provider", "Status", "Traffic(Bytes)")
     tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse")
     for col in columns:
         tree.heading(col, text=col)

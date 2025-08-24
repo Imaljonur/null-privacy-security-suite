@@ -228,7 +228,7 @@ def main():
                     foreground=ACCENT,
                     font=("Consolas", 10, "bold"))
 
-    columns = ("PID", "Name", "CPU", "RAM", "Pfad", "Commandline")
+    columns = ("PID", "Name", "CPU", "RAM", "Path", "Command line")
     tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse")
     for col in columns:
         tree.heading(col, text=col)
@@ -245,7 +245,7 @@ def main():
     statusbar = _card(root)
     statusbar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0,16))
     statusbar.grid_columnconfigure(0, weight=1)
-    _label(statusbar, "Tip: Freeze if needed – Kill ends the selected process.", muted=True).grid(row=0, column=0, padx=12, pady=10, sticky="w")
+    _label(statusbar, "Tip: Freeze if needed — Kill terminates the selected process.", muted=True).grid(row=0, column=0, padx=12, pady=10, sticky="w")
 
     threading.Thread(target=scan_processes, args=(tree, warn_label), daemon=True).start()
     root.mainloop()

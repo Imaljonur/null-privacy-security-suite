@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -126,7 +125,7 @@ def sanitize_target(raw: str) -> str:
         return s
 
 
-def resolve_dns(name_or_ip, use_tor=False):
+def resolve_dns(name_or_ip, use_tor=False, extra=False):
     result = {
         "input": name_or_ip,
         "is_ip": False,
@@ -136,6 +135,12 @@ def resolve_dns(name_or_ip, use_tor=False):
         "ptr": None,
         "ttls": [],
         "errors": [],
+        # optionale Felder bei --dns-extra
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "caa": [],
+        "soa": [],
         "note": ""
     }
     # IP?
@@ -151,7 +156,7 @@ def resolve_dns(name_or_ip, use_tor=False):
 
     if use_tor and not result["is_ip"]:
         result["fqdn"] = str(name_or_ip).strip(".")
-        result["note"] = "TOR enabled: skipping A/AAAA resolution (rdns via SOCKS5h)."
+        result["note"] = "TOR active: skipping A/AAAA resolution (rdns via SOCKS5h)."
         return result
 
     if 'dns' in globals() and dns is not None:
@@ -171,6 +176,33 @@ def resolve_dns(name_or_ip, use_tor=False):
                         result["ttls"].append(ans.rrset.ttl if hasattr(ans, "rrset") else None)
                     except Exception:
                         pass
+                # zusätzliche DNS-Typen optional
+                if extra and not result["is_ip"]:
+                    # MX
+                    try:
+                        ans = resolver.resolve(result["fqdn"], "MX")
+                        result["mx"] = sorted({str(r.exchange).rstrip(".") + (f" {getattr(r, 'preference', '')}".strip() if hasattr(r, "preference") else "") for r in ans})
+                    except Exception:
+                        pass
+                    # NS
+                    try:
+                        ans = resolver.resolve(result["fqdn"], "NS")
+                        result["ns"] = sorted({str(r).rstrip(".") for r in ans})
+                    except Exception:
+                        pass
+                    # TXT
+                    try:
+                        ans = resolver.resolve(result["fqdn"], "TXT")
+                        result["txt"] = sorted({"".join([t.decode(errors="ignore") if isinstance(t, bytes) else str(t) for t in r.strings]) for r in ans})
+                    except Exception:
+                        pass
+                    # CAA & SOA
+                    for rtype, key in (("CAA","caa"),("SOA","soa")):
+                        try:
+                            ans = resolver.resolve(result["fqdn"], rtype)
+                            result[key] = [str(ans[0])] if ans else []
+                        except Exception:
+                            pass
             else:
                 try:
                     rev = dns.reversename.from_address(name_or_ip)
@@ -264,7 +296,7 @@ def _http_client(use_tor=False, tor_host="127.0.0.1", tor_port=9050):
             client = httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=False, proxies=proxies, headers={"User-Agent":"Mozilla/5.0"})
         return client, None
     except TypeError as e:
-        return None, f"httpx 'proxies' not supported here: {e}"
+        return None, f"httpx does not support 'proxies' here: {e}"
     except Exception as e:
         return None, str(e)
 
@@ -449,7 +481,7 @@ def tls_cert_probe(host, port=443, use_tor=False, tor_host="127.0.0.1", tor_port
                 out["issuer"]  = iss
                 out["self_signed_like"] = (subj == iss) if subj and iss else False
             except Exception:
-                out["note"] = "cryptography not installed – certificate parsed in a basic way."
+                out["note"] = "cryptography not installed – certificate captured in a basic form."
         return out
     except Exception as e:
         out["error"] = str(e)
@@ -482,7 +514,7 @@ def apply_profile(profile, use_tor=False):
         jitter = (0.25, 0.8)
         max_workers = 4 if use_tor else 6
         rps = 1.0
-    elif profile == "Aggressiv" or profile == "Aggressive":
+    elif profile == "Aggressiv":
         HTTP_TIMEOUT, TCP_TIMEOUT, TLS_TIMEOUT = 8.0, 5.0, 8.0
         jitter = (0.0, 0.2)
         max_workers = 8 if use_tor else 16
@@ -508,7 +540,7 @@ class RateLimiter:
             self.next_time = now + self.min_interval
 
 
-def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=9050, profile="Balanced", do_banner=True):
+def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=9050, profile="Balanced", do_banner=True, dns_extra=False):
     target = sanitize_target(raw_target)
     jitter, max_workers, rps = apply_profile(profile, use_tor=use_tor)
     limiter = RateLimiter(rps)
@@ -533,14 +565,14 @@ def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=905
     }
 
     # DNS
-    dns_info = resolve_dns(target, use_tor=use_tor)
+    dns_info = resolve_dns(target, use_tor=use_tor, extra=dns_extra)
     report["dns"] = dns_info
     if not use_tor and dns_info.get("a_records"):
         if looks_fast_flux(dns_info["a_records"], dns_info.get("ttls", [])):
-            score_add(report, 2.0, "DNS hints at possible fast-flux (many A records / small TTL).")
+            score_add(report, 2.0, "DNS suggests possible fast-flux (many A records / low TTL).")
     if dns_info.get("ptr"):
         if entropy_ratio(dns_info["ptr"]) > 0.8:
-            score_add(report, 1.0, "PTR name looks high-entropy / auto-generated.")
+            score_add(report, 1.0, "PTR name appears high-entropy/auto-generated.")
 
     # Host for scan
     if dns_info.get("a_records") and not use_tor:
@@ -567,7 +599,7 @@ def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=905
             if banner:
                 report["banners"][p] = banner[:200]
             if is_open and p in (4444, 6667, 9001, 1337):
-                score_add(report, 1.0, f"Unusual open port {p} (common with C2/IRC/Tor).")
+                score_add(report, 1.0, f"Unusual open port {p} (häufig bei C2/IRC/Tor).")
             time.sleep(random.uniform(*jitter))
 
     # HTTP(S) over selected ports & paths (concurrent)
@@ -596,9 +628,9 @@ def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=905
                 sc = info.get("status_code")
                 bl = info.get("body_len", 0)
                 if sc in (301,302,307,308) and bl == 0:
-                    score_add(report, 0.5, f"Empty redirect at {info.get('url')} – possible decoy.")
+                    score_add(report, 0.5, f"Empty redirect at {info.get('url')} – evtl. Köder/Decoy.")
                 if sc in (403,404) and bl <= 100:
-                    score_add(report, 0.5, f"Very sparse error page ({sc}, {bl} B).")
+                    score_add(report, 0.5, f"Very short error page ({sc}, {bl}B).")
             time.sleep(random.uniform(*jitter))
 
     # Favicon on common ports (sequential)
@@ -626,21 +658,21 @@ def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=905
                 score_add(report, 1.5, "TLS certificate appears self-signed.")
             vd = tls.get("valid_days")
             if isinstance(vd, int) and vd <= 90:
-                score_add(report, 1.0, f"Very short certificate validity ({vd} days).")
+                score_add(report, 1.0, f"Very short certificate validity ({vd} Days).")
             # expired?
             try:
                 na = tls.get("not_after")
                 if na:
                     na_dt = datetime.fromisoformat(na.replace("Z","+00:00"))
                     if na_dt < datetime.now(timezone.utc):
-                        score_add(report, 0.8, "TLS certificate is expired.")
+                        score_add(report, 0.8, "TLS certificate has expired.")
             except Exception:
                 pass
             if tls.get("ocsp_stapled") is False:
                 score_add(report, 0.2, "OCSP stapling not present.")
             subj = tls.get("subject") or ""
             if subj and entropy_ratio(subj) > 0.75:
-                score_add(report, 0.5, "Certificate subject looks synthetic/high-entropy.")
+                score_add(report, 0.5, "Certificate subject appears artificial/high-entropy.")
 
     s = report["score"]
     if s >= 5:
@@ -650,9 +682,9 @@ def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=905
     elif s > 0:
         verdict = "LOW RISK (minor signals)"
     else:
-        verdict = "UNSUSPICIOUS by heuristics"
+        verdict = "NO FINDINGS by heuristic"
     report["verdict"] = verdict
-    report["summary"] = f"Score: {s:.1f} → {verdict}. Signals: {len(report['reasons'])}."
+    report["summary"] = f"Score: {s:.1f} → {verdict}. Notes: {len(report['reasons'])}."
     return report
 
 
@@ -772,7 +804,7 @@ def features_to_vector(feat: dict):
 
 def load_model(model_path: str):
     if joblib is None:
-        return None, "joblib/sklearn not installed"
+        return None, "joblib/sklearn nicht installiert"
     p = Path(model_path)
     if not p.exists():
         return None, "no model found"
@@ -780,7 +812,7 @@ def load_model(model_path: str):
         model = joblib.load(p)
         return model, None
     except Exception as e:
-        return None, f"model could not be loaded: {e}"
+        return None, f"Modell konnte nicht loaded werden: {e}"
 
 
 def train_model(data_dir: str, out_path: str, algo: str = "logreg"):
@@ -791,7 +823,7 @@ def train_model(data_dir: str, out_path: str, algo: str = "logreg"):
     labels_csv = data_dir / "labels.csv"
     reports_dir = data_dir / "reports"
     if not labels_csv.exists() or not reports_dir.exists():
-        raise RuntimeError("Expect folder with labels.csv and subfolder reports/ containing JSON reports.")
+        raise RuntimeError("Expect a folder with labels.csv and a subfolder reports/ containing JSON reports.")
 
     labels = pd.read_csv(labels_csv)
     if "target" not in labels.columns or "label" not in labels.columns:
@@ -942,14 +974,14 @@ class NullInspectorMLApp(ctk.CTk):
 
         title = ctk.CTkLabel(sb, text="null_inspector + ML", text_color=ACCENT, font=ctk.CTkFont(size=20, weight="bold"))
         title.grid(row=0, column=0, padx=16, pady=(16,4), sticky="w")
-        model_status = "loaded" if self.model_bundle else "not loaded"
+        model_status = "loaded" if self.model_bundle else "nicht loaded"
         _label(sb, f"ML model: {model_status}", muted=True).grid(row=1, column=0, padx=16, pady=(0,8), sticky="w")
 
         self.entry_target = ctk.CTkEntry(sb, placeholder_text="Domain or IP… (no http://)")
         self.entry_target.grid(row=2, column=0, padx=16, pady=(0,8), sticky="ew")
         self.entry_target.bind("<Return>", lambda e: self.start_scan())
 
-        _label(sb, "Ports (comma, empty = defaults):", muted=True).grid(row=3, column=0, padx=16, pady=(8,0), sticky="w")
+        _label(sb, "Ports (comma, empty=default):", muted=True).grid(row=3, column=0, padx=16, pady=(8,0), sticky="w")
         self.entry_ports = ctk.CTkEntry(sb, placeholder_text="80,443,8080,8443,22,53,4444,6667,9001,1337")
         self.entry_ports.grid(row=4, column=0, padx=16, pady=(0,8), sticky="ew")
 
@@ -970,10 +1002,12 @@ class NullInspectorMLApp(ctk.CTk):
         opt = _card(sb); opt.grid(row=7, column=0, padx=16, pady=(8,8), sticky="ew")
         _label(opt, "Scan profile:", muted=True).grid(row=0, column=0, padx=8, pady=6, sticky="w")
         self.profile = ctk.StringVar(value="Balanced")
-        for i, name in enumerate(["Stealth","Balanced","Aggressive"]):
+        for i, name in enumerate(["Stealth","Balanced","Aggressiv"]):
             ctk.CTkRadioButton(opt, text=name, variable=self.profile, value=name).grid(row=0, column=i+1, padx=8, pady=6, sticky="w")
         self.var_banner = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(opt, text="Read TCP banners", variable=self.var_banner).grid(row=1, column=0, columnspan=2, padx=8, pady=(0,8), sticky="w")
+        ctk.CTkCheckBox(opt, text="Read TCP banner", variable=self.var_banner).grid(row=1, column=0, columnspan=2, padx=8, pady=(0,8), sticky="w")
+        self.var_dns_extra = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(opt, text="DNS extras (MX/NS/TXT/CAA/SOA)", variable=self.var_dns_extra).grid(row=2, column=0, columnspan=3, padx=8, pady=(0,8), sticky="w")
 
         _btn_primary(sb, "🛡️ Start scan", self.start_scan).grid(row=8, column=0, padx=16, pady=(8,8), sticky="ew")
         _btn_subtle(sb, "💾 Export JSON", self.export_json).grid(row=9, column=0, padx=16, pady=(0,8), sticky="ew")
@@ -1016,7 +1050,7 @@ class NullInspectorMLApp(ctk.CTk):
         status = _card(self); status.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0,16))
         self.txt_status = _textbox(status, height=70)
         self.txt_status.grid(row=0, column=0, padx=12, pady=10, sticky="ew")
-        self._status("Use only where authorized. Results are heuristic/ML-based.")
+        self._status("Use only with authorization. Results are heuristic/ML-based.")
 
         self.report = None
 
@@ -1033,9 +1067,9 @@ class NullInspectorMLApp(ctk.CTk):
             return
         try:
             self.model_bundle = joblib.load(path)
-            messagebox.showinfo("ML", f"Model loaded: {path}")
+            messagebox.showinfo("ML", f"Modell loaded: {path}")
         except Exception as e:
-            messagebox.showerror("ML", f"Could not load model: {e}")
+            messagebox.showerror("ML", f"Konnte Modell nicht laden: {e}")
 
     # --- helpers ---
     def _status(self, msg):
@@ -1045,19 +1079,20 @@ class NullInspectorMLApp(ctk.CTk):
     # --- Tab builders ---
     def _init_reasons(self, parent):
         parent.grid_columnconfigure(0, weight=1)
-        cols = ("Points", "Reason")
+        cols = ("Punkte", "Grund")
         self.tree_reasons = ttk.Treeview(parent, columns=cols, show="headings", selectmode="browse")
-        self.tree_reasons.heading("Points", text="Points")
-        self.tree_reasons.heading("Reason", text="Reason")
-        self.tree_reasons.column("Points", width=80, anchor="center")
-        self.tree_reasons.column("Reason", width=900, anchor="w")
+        self.tree_reasons.heading("Punkte", text="Punkte")
+        self.tree_reasons.heading("Grund", text="Grund")
+        self.tree_reasons.column("Punkte", width=80, anchor="center")
+        self.tree_reasons.column("Grund", width=900, anchor="w")
         self.tree_reasons.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         vsb = ttk.Scrollbar(parent, orient="vertical", command=self.tree_reasons.yview)
         self.tree_reasons.configure(yscrollcommand=vsb.set); vsb.grid(row=0, column=1, sticky="ns")
 
     def _init_dns(self, parent):
         parent.grid_columnconfigure(1, weight=1)
-        self.var_a = ctk.StringVar(value="—"); self.var_aaaa = ctk.StringVar(value="—"); self.var_ptr = ctk.StringVar(value="—"); self.var_ttl = ctk.StringVar(value="—")
+        self.var_a = ctk.StringVar(value="—"); self.var_aaaa = ctk.StringVar(value="—"); self.var_ptr = ctk.StringVar(value="—"); self.var_ttl = ctk.StringVar(value="—");
+        self.var_mx = ctk.StringVar(value="—"); self.var_ns = ctk.StringVar(value="—"); self.var_txt = ctk.StringVar(value="—"); self.var_caa = ctk.StringVar(value="—"); self.var_soa = ctk.StringVar(value="—")
         _label(parent, "A:", muted=True).grid(row=0, column=0, padx=8, pady=6, sticky="w")
         _label(parent, "", muted=False).configure(textvariable=self.var_a); ctk.CTkLabel(parent, textvariable=self.var_a, text="").grid(row=0, column=1, padx=8, pady=6, sticky="w")
         _label(parent, "AAAA:", muted=True).grid(row=1, column=0, padx=8, pady=6, sticky="w")
@@ -1066,8 +1101,18 @@ class NullInspectorMLApp(ctk.CTk):
         ctk.CTkLabel(parent, textvariable=self.var_ptr, text="").grid(row=2, column=1, padx=8, pady=6, sticky="w")
         _label(parent, "TTL(s):", muted=True).grid(row=3, column=0, padx=8, pady=6, sticky="w")
         ctk.CTkLabel(parent, textvariable=self.var_ttl, text="").grid(row=3, column=1, padx=8, pady=6, sticky="w")
-        _label(parent, "Notes:", muted=True).grid(row=4, column=0, padx=8, pady=6, sticky="nw")
-        self.txt_dns_err = _textbox(parent, height=110); self.txt_dns_err.grid(row=4, column=1, sticky="ew", padx=8, pady=8)
+        _label(parent, "MX:", muted=True).grid(row=4, column=0, padx=8, pady=6, sticky="w")
+        ctk.CTkLabel(parent, textvariable=self.var_mx, text="").grid(row=4, column=1, padx=8, pady=6, sticky="w")
+        _label(parent, "NS:", muted=True).grid(row=5, column=0, padx=8, pady=6, sticky="w")
+        ctk.CTkLabel(parent, textvariable=self.var_ns, text="").grid(row=5, column=1, padx=8, pady=6, sticky="w")
+        _label(parent, "TXT:", muted=True).grid(row=6, column=0, padx=8, pady=6, sticky="w")
+        ctk.CTkLabel(parent, textvariable=self.var_txt, text="").grid(row=6, column=1, padx=8, pady=6, sticky="w")
+        _label(parent, "CAA:", muted=True).grid(row=7, column=0, padx=8, pady=6, sticky="w")
+        ctk.CTkLabel(parent, textvariable=self.var_caa, text="").grid(row=7, column=1, padx=8, pady=6, sticky="w")
+        _label(parent, "SOA:", muted=True).grid(row=8, column=0, padx=8, pady=6, sticky="w")
+        ctk.CTkLabel(parent, textvariable=self.var_soa, text="").grid(row=8, column=1, padx=8, pady=6, sticky="w")
+        _label(parent, "Notes:", muted=True).grid(row=9, column=0, padx=8, pady=6, sticky="nw")
+        self.txt_dns_err = _textbox(parent, height=110); self.txt_dns_err.grid(row=9, column=1, sticky="ew", padx=8, pady=8)
 
     def _init_ports(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -1097,7 +1142,7 @@ class NullInspectorMLApp(ctk.CTk):
         for i, lab in enumerate(labels):
             _label(parent, f"{lab}:", muted=True).grid(row=i, column=0, padx=8, pady=4, sticky="w")
             val = ctk.CTkLabel(parent, textvariable=self.tls_vars[i], text=""); val.grid(row=i, column=1, padx=8, pady=4, sticky="w")
-        _label(parent, "Errors/Notes:", muted=True).grid(row=len(labels), column=0, padx=8, pady=6, sticky="nw")
+        _label(parent, "Fehler/Notes:", muted=True).grid(row=len(labels), column=0, padx=8, pady=6, sticky="nw")
         self.txt_tls_err = _textbox(parent, height=90); self.txt_tls_err.grid(row=len(labels), column=1, sticky="ew", padx=8, pady=8)
 
     def _init_fav(self, parent):
@@ -1114,7 +1159,7 @@ class NullInspectorMLApp(ctk.CTk):
         raw_target = (self.entry_target.get() or "").strip()
         ports_txt = (self.entry_ports.get() or "").strip()
         if not raw_target:
-            messagebox.showwarning("Missing input", "Please enter a domain or IP.")
+            messagebox.showwarning("Input missing", "Please enter a domain or IP.")
             return
         ports = []
         if ports_txt:
@@ -1133,15 +1178,16 @@ class NullInspectorMLApp(ctk.CTk):
             tor_port = 9050
         prof = self.profile.get()
         do_banner = bool(self.var_banner.get())
-        self.var_summary.set("Scanning…")
+        dns_extra = bool(self.var_dns_extra.get())
+        self.var_summary.set("Scanning …")
         cleaned = sanitize_target(raw_target)
-        self._status(f"Start scan — Target: {cleaned} (from '{raw_target}') · TOR={'on' if use_tor else 'off'} ({tor_host}:{tor_port}) · Profile={prof}")
-        th = threading.Thread(target=self._scan_thread, args=(raw_target, sorted(set(ports)), use_tor, tor_host, tor_port, prof, do_banner), daemon=True)
+        self._status(f"Start scan – target: {cleaned} (from '{raw_target}') · TOR={'an' if use_tor else 'from'} ({tor_host}:{tor_port}) · profile={prof}")
+        th = threading.Thread(target=self._scan_thread, args=(raw_target, sorted(set(ports)), use_tor, tor_host, tor_port, prof, do_banner, dns_extra), daemon=True)
         th.start()
 
-    def _scan_thread(self, raw_target, ports, use_tor, tor_host, tor_port, profile, do_banner):
+    def _scan_thread(self, raw_target, ports, use_tor, tor_host, tor_port, profile, do_banner, dns_extra):
         try:
-            rep = analyze(raw_target, ports, use_tor=use_tor, tor_host=tor_host, tor_port=tor_port, profile=profile, do_banner=do_banner)
+            rep = analyze(raw_target, ports, use_tor=use_tor, tor_host=tor_host, tor_port=tor_port, profile=profile, do_banner=do_banner, dns_extra=dns_extra)
             self.report = rep
             self._render_report(rep)
             self._status("Scan finished.")
@@ -1155,10 +1201,10 @@ class NullInspectorMLApp(ctk.CTk):
         # ML probability (if model available), else heuristic
         if self.model_bundle:
             p, why = ml_predict(self.model_bundle, rep)
-            self.var_ai.set(f"ML: {p*100:.1f}% risk · Top features: {', '.join(why) if why else 'n/a'}")
+            self.var_ai.set(f"ML: {p*100:.1f}% Risiko · Top-Features: {', '.join(why) if why else 'n/a'}")
         else:
             p, _, why = ai_probability_heuristic(rep)
-            self.var_ai.set(f"Heuristic: {p*100:.1f}% risk · Drivers: {', '.join(why) if why else '—'}")
+            self.var_ai.set(f"Heuristik: {p*100:.1f}% Risiko · Treiber: {', '.join(why) if why else '—'}")
 
         # Reasons
         for i in self.tree_reasons.get_children(): self.tree_reasons.delete(i)
@@ -1171,6 +1217,11 @@ class NullInspectorMLApp(ctk.CTk):
         self.var_aaaa.set(", ".join(dns.get("aaaa_records", [])) or "—")
         self.var_ptr.set(dns.get("ptr") or "—")
         self.var_ttl.set(", ".join(str(t) for t in dns.get("ttls", []) if t is not None) or "—")
+        self.var_mx.set(", ".join(dns.get("mx", []) or []) or "—")
+        self.var_ns.set(", ".join(dns.get("ns", []) or []) or "—")
+        self.var_txt.set(" | ".join(dns.get("txt", []) or []) or "—")
+        self.var_caa.set(", ".join(dns.get("caa", []) or []) or "—")
+        self.var_soa.set(", ".join(dns.get("soa", []) or []) or "—")
         self.txt_dns_err.delete("1.0","end")
         notes = []
         if dns.get("errors"):
@@ -1234,7 +1285,7 @@ class NullInspectorMLApp(ctk.CTk):
                 json.dump(self.report, f, indent=2, ensure_ascii=False)
             messagebox.showinfo("Export", f"Saved: {path}")
         except Exception as e:
-            messagebox.showerror("Export error", str(e))
+            messagebox.showerror("Error while exporting", str(e))
 
 
 # ------------------------------
@@ -1243,17 +1294,18 @@ class NullInspectorMLApp(ctk.CTk):
 
 def main():
     parser = argparse.ArgumentParser(description="null_inspector + ML (GUI/CLI) with optional TOR routing")
-    parser.add_argument("--nogui", action="store_true", help="no GUI: CLI scan and JSON to stdout")
-    parser.add_argument("--tor", action="store_true", help="scan via TOR (SOCKS5h)")
+    parser.add_argument("--nogui", action="store_true", help="no GUI: CLI scan only and JSON to stdout")
+    parser.add_argument("--tor", action="store_true", help="Scan via TOR (SOCKS5h)")
     parser.add_argument("--tor-host", default="127.0.0.1")
     parser.add_argument("--tor-port", default="9050")
-    parser.add_argument("--profile", default="Balanced", choices=["Stealth","Balanced","Aggressive"])
-    parser.add_argument("--no-banner", action="store_true", help="do not read TCP banners")
+    parser.add_argument("--profile", default="Balanced", choices=["Stealth","Balanced","Aggressiv"])
+    parser.add_argument("--no-banner", action="store_true", help="kein Read TCP banner")
     parser.add_argument("--train", action="store_true", help="start ML training (see --data, --out, --algo)")
     parser.add_argument("--data", default="", help="path to training data folder (labels.csv + reports/)")
-    parser.add_argument("--out", default="models/null_inspector_model.joblib", help="path for saved model (joblib)")
-    parser.add_argument("--algo", default="logreg", choices=["logreg","lgbm"], help="ML algorithm")
-    parser.add_argument("--favicon-db", default="", help="path to favicon hash DB (JSON)")
+    parser.add_argument("--out", default="models/null_inspector_model.joblib", help="path for model file (joblib)")
+    parser.add_argument("--algo", default="logreg", choices=["logreg","lgbm"], help="ML-Algorithmus")
+    parser.add_argument("--dns-extra", action="store_true", help="query additional DNS types (MX, NS, TXT, CAA, SOA)")
+    parser.add_argument("--favicon-db", default="", help="path to favicon-hash DB (JSON)")
     parser.add_argument("target", nargs="?", help="optional: target (only for --nogui)")
     parser.add_argument("--ports", help="comma-separated list of ports", default="")
     args = parser.parse_args()
@@ -1267,7 +1319,7 @@ def main():
 
     if args.nogui:
         if not args.target:
-            print("Please provide a target. Example: --nogui example.com --ports 80,443,8080 --tor")
+            print("Please specify a target. Example: --nogui example.com --ports 80,443,8080 --tor")
             return
         # parse ports
         ports = []
@@ -1284,7 +1336,8 @@ def main():
                       tor_host=args.tor_host,
                       tor_port=int(args.tor_port),
                       profile=args.profile,
-                      do_banner=(not args.no_banner))
+                      do_banner=(not args.no_banner),
+                      dns_extra=args.dns_extra)
 
         # If a saved model exists at default path, use it
         if Path("models/null_inspector_model.joblib").exists() and joblib is not None:

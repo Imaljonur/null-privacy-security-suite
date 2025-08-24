@@ -8,8 +8,25 @@ from scapy.all import ARP, Ether, srp, sr1, ICMP, IP
 import requests
 import customtkinter as ctk
 
-# ∅NetworkScanner v2 – ARP-Scan + Port-, OS- & Vendor-Erkennung
-# Erweiterung: automatische Vendor-Lookup über macvendors API, caching
+# ---- Sentinel UDP (realtime, no GUI changes) ----
+import os, json, socket
+from datetime import datetime, timezone
+
+SENT_HOST = os.environ.get("NULL_SENTINEL_HOST", "127.0.0.1")
+SENT_PORT = int(os.environ.get("NULL_SENTINEL_PORT", "5140"))
+_SENT_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def _utcnow_iso():
+    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+def sentinel(ev: dict):
+    try:
+        _SENT_SOCK.sendto(json.dumps(ev, ensure_ascii=False).encode("utf-8"), (SENT_HOST, SENT_PORT))
+    except Exception:
+        pass
+
+# ∅NetworkScanner v2 – ARP scan + port, OS & vendor detection
+# Extension: automatic vendor lookup via macvendors API, caching
 # NOTE: Only GUI/layout changed to CustomTkinter Nullsearch style. Logic unchanged.
 
 # =========================
@@ -62,7 +79,7 @@ class NetworkScannerApp:
         sb.grid_columnconfigure(0, weight=1)
 
         _title(sb, "∅ NetworkScanner").grid(row=0, column=0, padx=16, pady=(16,4), sticky="w")
-        _label(sb, "ARP-Scan · Ports · OS · Vendor", muted=True).grid(row=1, column=0, padx=16, pady=(0,12), sticky="w")
+        _label(sb, "ARP scan · Ports · OS · Vendor", muted=True).grid(row=1, column=0, padx=16, pady=(0,12), sticky="w")
 
         # Auto-Detection des lokalen /24-Netzes (unchanged logic)
         try:
@@ -75,7 +92,7 @@ class NetworkScannerApp:
         net_card = _card(sb)
         net_card.grid(row=2, column=0, padx=16, pady=(0,12), sticky="ew")
         net_card.grid_columnconfigure(0, weight=1)
-        _label(net_card, "Network (e.g. 192.168.1.0/24):", muted=True).grid(row=0, column=0, padx=10, pady=(10,4), sticky="w")
+        _label(net_card, "Network (e.g., 192.168.1.0/24):", muted=True).grid(row=0, column=0, padx=10, pady=(10,4), sticky="w")
         self.net_entry = ctk.CTkEntry(net_card, textvariable=self.network_var, placeholder_text="192.168.1.0/24")
         self.net_entry.grid(row=1, column=0, padx=10, pady=(0,10), sticky="ew")
 
@@ -126,7 +143,7 @@ class NetworkScannerApp:
         if col in ('#4', '#5'):
             col_name = 'Vendor' if col=='#4' else 'OS'
             old = self.tree.set(item, col_name)
-            new = simpledialog.askstring(f"{col_name} bearbeiten", f"Gib {col_name} ein:", initialvalue=old)
+            new = simpledialog.askstring(f"{col_name} edit", f"Gib {col_name} ein:", initialvalue=old)
             if new is not None:
                 self.tree.set(item, col_name, new)
 
@@ -187,6 +204,16 @@ class NetworkScannerApp:
             ports_str = ','.join(open_ports) if open_ports else '-'
             tag = ('open',) if open_ports else ()
             self.tree.insert('', tk.END, values=(ip, host, mac, vendor, os_type, ports_str), tags=tag)
+            # Realtime emit to Sentinel (UDP)
+            sentinel({
+                "ts": _utcnow_iso(),
+                "tool": "networkscan",
+                "level": "warn" if open_ports else "info",
+                "host": "",
+                "pid": 0,
+                "msg": f"scan host: {ip} ({host})",
+                "labels": {"ip": ip, "host": host, "mac": mac, "vendor": vendor, "os": os_type, "open_ports": ports_str}
+            })
         if not ans:
             messagebox.showinfo("Result","No hosts found.")
         self.scanning = False

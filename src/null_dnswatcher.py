@@ -1,17 +1,33 @@
-# null_dnswatcher_en.py
-# ∅ DNSWatcher – CustomTkinter GUI (Nullsearch Dark/Green)
-# All UI strings and comments in English. Logic unchanged.
+# dnswatcher_ctk.py
+# ∅DNSWatcher – CustomTkinter GUI in your Nullsearch style (dark + green)
 
 import customtkinter as ctk
 from tkinter import ttk, filedialog, messagebox
 from scapy.all import AsyncSniffer, DNSQR, IP, IPv6
 import threading, queue, time, re, csv, sys
 
+# ---- Sentinel UDP (realtime, no GUI changes) ----
+import os, json, socket
+from datetime import datetime, timezone
+
+SENT_HOST = os.environ.get("NULL_SENTINEL_HOST", "127.0.0.1")
+SENT_PORT = int(os.environ.get("NULL_SENTINEL_PORT", "5140"))
+_SENT_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def _utcnow_iso():
+    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+def sentinel(ev: dict):
+    try:
+        _SENT_SOCK.sendto(json.dumps(ev, ensure_ascii=False).encode("utf-8"), (SENT_HOST, SENT_PORT))
+    except Exception:
+        pass
+
 # ==========================
 # Design / Theme (dark+green)
 # ==========================
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("green")  # bright accent like nullsearch
+ctk.set_default_color_theme("green")  # grelle Akzentfarbe wie nullsearch
 
 ACCENT        = "#00FF88"
 BG_DARK       = "#0B0F10"
@@ -24,7 +40,7 @@ FG_OK         = "#7CE38B"
 BORDER        = "#1D252B"
 
 # ===========
-# Heuristics
+# Heuristiken
 # ===========
 TRACKER_PATTERNS = [
     r"doubleclick\.net",
@@ -73,7 +89,7 @@ class DNSWatcherApp(ctk.CTk):
         # Periodic UI updates
         self.after(100, self._drain_queue)
 
-    # ------------- UI building -------------
+    # ------------- UI Build -------------
     def _card(self, parent):
         frame = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=14, border_color=BORDER, border_width=1)
         return frame
@@ -87,12 +103,12 @@ class DNSWatcherApp(ctk.CTk):
         self.sidebar.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(self.sidebar, text="∅ DNSWatcher", text_color=ACCENT, font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=16, pady=(16,6), sticky="w")
-        ctk.CTkLabel(self.sidebar, text="Live DNS requests", text_color=FG_MUTED).grid(row=1, column=0, padx=16, pady=(0,12), sticky="w")
+        ctk.CTkLabel(self.sidebar, text="Live DNS Requests", text_color=FG_MUTED).grid(row=1, column=0, padx=16, pady=(0,12), sticky="w")
 
         self.iface_entry = ctk.CTkEntry(self.sidebar, placeholder_text="Interface (e.g., eth0, en0, wlan0)")
         self.iface_entry.grid(row=2, column=0, padx=16, pady=(0,10), sticky="ew")
 
-        self.filter_entry = ctk.CTkEntry(self.sidebar, placeholder_text="Domain/Regex filter (optional)")
+        self.filter_entry = ctk.CTkEntry(self.sidebar, placeholder_text="Domain/Regex Filter (optional)")
         self.filter_entry.grid(row=3, column=0, padx=16, pady=(0,10), sticky="ew")
 
         self.only_new_var = ctk.BooleanVar(value=False)
@@ -118,7 +134,7 @@ class DNSWatcherApp(ctk.CTk):
         ctk.CTkLabel(legend, text="• Suspicious", text_color=FG_SUSPICIOUS).pack(anchor="w", padx=12)
         ctk.CTkLabel(legend, text="• OK", text_color=FG_OK).pack(anchor="w", padx=12, pady=(0,10))
 
-        ctk.CTkLabel(self.sidebar, text="Note: Root/Admin is required for sniffing.", text_color=FG_MUTED, wraplength=220, font=ctk.CTkFont(size=12)).grid(row=18, column=0, padx=16, pady=(0,16), sticky="w")
+        ctk.CTkLabel(self.sidebar, text="Note: Root/Admin privileges required for sniffing.", text_color=FG_MUTED, wraplength=220, font=ctk.CTkFont(size=12)).grid(row=18, column=0, padx=16, pady=(0,16), sticky="w")
 
     def _build_main(self):
         self.main = self._card(self)
@@ -160,8 +176,8 @@ class DNSWatcherApp(ctk.CTk):
         self.tree.heading("time", text="Time")
         self.tree.heading("src",  text="Source")
         self.tree.heading("qname",text="Domain")
-        self.tree.heading("type", text="Type")
-        self.tree.heading("flag", text="Label")
+        self.tree.heading("type", text="Typee")
+        self.tree.heading("flag", text="Classification")
 
         self.tree.column("time", width=130, anchor="w")
         self.tree.column("src",  width=140, anchor="w")
@@ -174,7 +190,7 @@ class DNSWatcherApp(ctk.CTk):
         self.tree.configure(yscrollcommand=vsb.set)
         vsb.grid(row=0, column=1, sticky="ns")
 
-        # Row tags (colors)
+        # Row tags / colors
         self.tree.tag_configure("tracker", foreground=FG_TRACKER)
         self.tree.tag_configure("suspicious", foreground=FG_SUSPICIOUS)
         self.tree.tag_configure("ok", foreground=FG_OK)
@@ -193,9 +209,9 @@ class DNSWatcherApp(ctk.CTk):
             return box, val
 
         self.box_total, self.lbl_total   = metric("Requests", "0")
-        self.box_track, self.lbl_track   = metric("Trackers", "0")
+        self.box_track, self.lbl_track   = metric("Tracker", "0")
         self.box_susp,  self.lbl_susp    = metric("Suspicious", "0")
-        self.box_unique,self.lbl_unique  = metric("Unique domains", "0")
+        self.box_unique,self.lbl_unique  = metric("Unique Domains", "0")
         self.box_state, self.lbl_state   = metric("Sniffer", "idle")
 
         self.box_total.grid(row=0, column=0, sticky="ew", padx=(0,8))
@@ -253,9 +269,9 @@ class DNSWatcherApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Export", f"Error while saving:\n{e}")
 
-    # ------------- Callbacks / Internals -------------
+    # ------------- Callbacks / Internal -------------
     def _on_packet(self, pkt):
-        # runs in the sniffer thread -> put into queue
+        # runs in sniffer thread -> enqueue
         try:
             if (IP in pkt or IPv6 in pkt) and pkt.haslayer(DNSQR):
                 src = pkt[IP].src if IP in pkt else pkt[IPv6].src
@@ -266,14 +282,14 @@ class DNSWatcherApp(ctk.CTk):
             pass
 
     def _drain_queue(self):
-        # runs in the UI thread
+        # runs in UI thread
         while True:
             try:
                 ts, src, qn, qtype = self.pkt_queue.get_nowait()
             except queue.Empty:
                 break
 
-            # Filter / only new
+            # Filter/Only new
             if self.only_new_var.get() and qn in self.domains_seen:
                 continue
 
@@ -283,7 +299,7 @@ class DNSWatcherApp(ctk.CTk):
                     if not re.search(flt, qn, re.I):
                         continue
                 except re.error:
-                    # invalid regex -> treat as "no filter"
+                    # invalid regex -> treat like no filter
                     pass
 
             tag, flagtext = self._classify(qn)
@@ -297,6 +313,20 @@ class DNSWatcherApp(ctk.CTk):
 
             tstr = time.strftime("%H:%M:%S", time.localtime(ts))
             self.tree.insert("", "end", values=(tstr, src, qn, qtype, flagtext), tags=(tag,))
+            # Realtime emit to Sentinel (UDP)
+            level = "info"
+            if tag == "tracker": level = "alert"
+            elif tag == "suspicious": level = "warn"
+            sentinel({
+                "ts": _utcnow_iso(),
+                "tool": "dnswatcher",
+                "level": level,
+                "host": "",
+                "pid": 0,
+                "msg": f"DNS query: {qn}",
+                "labels": {"domain": qn, "ip": src, "qtype": str(qtype), "flag": flagtext}
+            })
+
             # Auto-scroll
             self.tree.yview_moveto(1.0)
             self._sync_counters()
