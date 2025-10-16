@@ -131,7 +131,7 @@ Central entry point to start modules (Monitor, Messenger, Crypto, Network, Proce
 
 Honeytokens, process heuristics, optional ML anomaly detection, and quick firewall/IP actions.
 
-### Nullsearch (Tor DuckDuckGo)
+### Nullsearch (Tor DuckDuckGo and Brave)
 
 ![Nullsearch (Tor DuckDuckGo)](docs/images/null_nullsearch.jpg)
 
