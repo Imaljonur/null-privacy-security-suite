@@ -7,6 +7,36 @@ import ipaddress
 import customtkinter as ctk
 from tkinter import ttk, messagebox
 
+# --- Safety helpers (additive) ---
+import ctypes, os
+
+def is_windows_admin():
+    try:
+        return os.name == "nt" and ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+def run_netsh(cmd_list):
+    """
+    Run a netsh command safely (no shell). Returns True if executed, False otherwise.
+    Shows a message if admin rights are missing.
+    """
+    try:
+        if not is_windows_admin():
+            try:
+                messagebox.showerror("Permission", "Admin rights required to modify firewall rules.")
+            except Exception:
+                pass
+            return False
+        # Ensure it's a list of strings
+        if not isinstance(cmd_list, (list, tuple)):
+            return False
+        cmd_list = [str(x) for x in cmd_list]
+        subprocess.run(cmd_list, check=False, capture_output=True)
+        return True
+    except Exception:
+        return False
+
 # ∅PortBlocker – GUI Firewall: Block outgoing connections by process, port, or IP range
 # Windows implementation using netsh advfirewall commands
 # NOTE: Only GUI/layout changed to CustomTkinter Nullsearch style. Logic unchanged.
@@ -150,16 +180,27 @@ class PortBlockerApp:
         sel = self.tree.selection()
         if not sel: return
         ip = self.tree.item(sel[0])['values'][3].split(':')[0]
+        try:
+            ipaddress.ip_address(ip)
+        except Exception:
+            messagebox.showerror("Error", f"Invalid IP: {ip}")
+            return
         cmd = ["netsh", "advfirewall", "firewall", "add", "rule", f"name=BlockIP_{ip}", "dir=out", "action=block", f"remoteip={ip}"]
-        subprocess.run(cmd, shell=True)
+        run_netsh(cmd)
         messagebox.showinfo("Blocked", f"IP {ip} has been blocked")
 
     def block_port(self):
         sel = self.tree.selection()
         if not sel: return
         port = self.tree.item(sel[0])['values'][4]
+        try:
+            port_i = int(str(port))
+            if not (1 <= port_i <= 65535): raise ValueError()
+        except Exception:
+            messagebox.showerror("Error", f"Invalid port: {port}")
+            return
         cmd = ["netsh", "advfirewall", "firewall", "add", "rule", f"name=BlockPort_{port}", "dir=out", "action=block", f"remoteport={port}"]
-        subprocess.run(cmd, shell=True)
+        run_netsh(cmd)
         messagebox.showinfo("Blocked", f"Port {port} has been blocked")
 
     def block_process(self):
@@ -172,9 +213,9 @@ class PortBlockerApp:
             path = psutil.Process(pid).exe()
         except:
             path = ""
-        rule = f"BlockProc_{proc}_{pid}"
-        cmd = ["netsh", "advfirewall", "firewall", "add", "rule", f"name={rule}", "dir=out", "action=block", f"program={path}"]
-        subprocess.run(cmd, shell=True)
+        if not path:
+            messagebox.showerror("Error", "Process path not found."); return
+        run_netsh(cmd)
         messagebox.showinfo("Blocked", f"Process {proc} has been blocked")
 
 if __name__ == "__main__":

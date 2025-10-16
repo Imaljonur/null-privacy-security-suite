@@ -76,7 +76,7 @@ def _load_or_create_server_id(app_dir: Path):
 # --- end identity/trust helpers ---
 
 
-# Crypto (vom User)
+# Crypto (from user)
 try:
     from nullcrypto_gui import encrypt_text, decrypt_text, encrypt_file, decrypt_file, KDF_PRESETS, encrypt_data, decrypt_data
 except Exception as e:
@@ -252,7 +252,7 @@ class NullMessenger(ctk.CTk):
         ctk.CTkLabel(self.sidebar, text="KDF Profile", text_color=THEME["muted"]).pack(anchor="w", padx=10, pady=(10,4))
         self.kdf_combo = ctk.CTkComboBox(self.sidebar, values=list(KDF_PRESETS.keys())); self.kdf_combo.set("Standard"); self.kdf_combo.pack(fill="x", padx=10)
         ctk.CTkLabel(self.sidebar, text="Nickname", text_color=THEME["muted"]).pack(anchor="w", padx=10, pady=(10,4))
-        self.entry_nick = ctk.CTkEntry(self.sidebar); self.entry_nick.pack(fill="x", padx=10); self.entry_nick.insert(0,"ich")
+        self.entry_nick = ctk.CTkEntry(self.sidebar); self.entry_nick.pack(fill="x", padx=10); self.entry_nick.insert(0,"me")
         ctk.CTkLabel(self.sidebar, text="Room", text_color=THEME["muted"]).pack(anchor="w", padx=10, pady=(10,4))
         self.entry_room = ctk.CTkEntry(self.sidebar); self.entry_room.pack(fill="x", padx=10); self.entry_room.insert(0,"default")
         self.btn_action = ctk.CTkButton(self.sidebar, text="Start", command=self.start_action); self.btn_action.pack(fill="x", padx=10, pady=(12,6))
@@ -269,7 +269,7 @@ class NullMessenger(ctk.CTk):
         self.entry = ctk.CTkEntry(bottom, placeholder_text="Message…"); self.entry.grid(row=0, column=0, sticky="ew", padx=(0,8)); self.entry.bind("<Return>", lambda e: self.send_msg())
         self.btn_file = ctk.CTkButton(bottom, text="📎", width=44, command=self.send_file); self.btn_file.grid(row=0, column=1, padx=(0,8))
         self.btn_send = ctk.CTkButton(bottom, text="Send", command=self.send_msg); self.btn_send.grid(row=0, column=2)
-        # --- NullCrypto (manuell) ---
+        # --- NullCrypto (manual) ---
         nc_row = ctk.CTkFrame(self.main, fg_color=THEME["bg_alt"])
         nc_row.grid(row=3, column=0, sticky="ew", padx=10, pady=(0,10))
         nc_row.grid_columnconfigure(1, weight=1)
@@ -326,7 +326,7 @@ class NullMessenger(ctk.CTk):
             except Exception: pass
 
     def _derive_session_password(self, shared_secret: bytes) -> str:
-        # Base64 der ECDH-Secret als "Passwort" für nullcrypto-KDF
+        # Base64 der ECDH-Secret als "Passwort" for nullcrypto-KDF
         return base64.b64encode(shared_secret).decode("ascii")
 
     def start_action(self):
@@ -352,18 +352,18 @@ class NullMessenger(ctk.CTk):
         try:
             hs = _wait_for_onions()
             self.active_onion = hs["chat"]
-            self.header.configure(text=f"Host aktiv: {hs['chat']}"); self.log(f"Your Chat-Onion: {hs['chat']}"); self.log(f"Your File-Onion: {hs['file']}")
+            self.header.configure(text=f"Host active: {hs['chat']}"); self.log(f"Your Chat-Onion: {hs['chat']}"); self.log(f"Your File-Onion: {hs['file']}")
             self.set_status("Hidden services running."); self.set_connected_state(True)
         except Exception as e:
             messagebox.showerror("HS Error", str(e)); self.set_status("Hidden service error.")
 
     def _handle_chat_client(self, sock: socket.socket):
-        addr = sock.getpeername(); self.log(f"[+] Chat verbunden von {addr}")
+        addr = sock.getpeername(); self.log(f"[+] Chat connected from {addr}")
         # ECDH: zuerst keyex des Clients empfangen
         try:
             first = recv_json(sock)
             if first.get("type") != "keyex":
-                self.log("[x] Erwartete keyex zuerst. Connection closed."); sock.close(); return
+                self.log("[x] Expected 'keyex' first. Connection closed."); sock.close(); return
             try:
                 cli_pub_bytes = base64.b64decode(first.get("pubkey",""))
                 cli_pub = x25519.X25519PublicKey.from_public_bytes(cli_pub_bytes)
@@ -386,7 +386,7 @@ class NullMessenger(ctk.CTk):
             }).encode("utf-8")
             sig = self.server_id_priv.sign(bundle)
             send_json(sock, {"type":"keyex","pubkey": base64.b64encode(srv_pub).decode("ascii"), "sid_pub": base64.b64encode(sid_pub_bytes).decode("ascii"), "sig": base64.b64encode(sig).decode("ascii"), "bundle": base64.b64encode(bundle).decode("ascii")})
-            self.set_status("Session-Key aktiv")
+            self.set_status("Session key active")
         except Exception as e:
             self.log(f"[x] Key-exchange error: {e}"); 
             try: sock.close()
@@ -402,7 +402,7 @@ class NullMessenger(ctk.CTk):
             room = str(hello.get("room") or "default")[:64]
             client_id = str(hello.get("client_id") or "")[:64]
             if room != self.room:
-                self.log(f"[x] Client in anderem Room: {room} (Server-Room: {self.room}) — trenne."); sock.close(); return
+                self.log(f"[x] Client in different room: {room} (Server-Room: {self.room})  — disconnect."); sock.close(); return
             # Bans
             now=time.time(); until=self.bans.get(client_id, None)
             if until is None and client_id in self.bans:
@@ -468,10 +468,10 @@ class NullMessenger(ctk.CTk):
                     except Exception as e:
                         text = "[Decrypt error: {}]".format(e)
                     nick_in = self.clients_map.get(sock) or obj.get("nick") or "Peer"
-                    self.log(f"{{nick_in}}: {{text}}")
+                    self.log(f"{nick_in}: {text}")
                 elif t == "file":
 
-                    # Datei-Stream über Chat-Socket (verschlüsselt per Session-Key)
+                    # File stream over chat socket (encrypted via session key)
 
                     sess = self.sessions.get(sock)
 
@@ -525,7 +525,7 @@ class NullMessenger(ctk.CTk):
 
                         self.log("[x] File decryption failed: {}".format(e))
 
-                    # Client initiiert Rotation
+                    # Client initiates rotation
                     try:
                         peer_pub = x25519.X25519PublicKey.from_public_bytes(base64.b64decode(obj.get("pubkey","")))
                         priv = x25519.X25519PrivateKey.generate()
@@ -536,7 +536,7 @@ class NullMessenger(ctk.CTk):
                             sess["sess_pw"] = self._derive_session_password(shared)
                             sess["count"] = 0
                         send_json(sock, {"type":"rekey_ack","pubkey": base64.b64encode(pub).decode("ascii")})
-                        self.set_status("Session-Key aktiv (rotated)")
+                        self.set_status("Session key active (rotated)")
                     except Exception as e:
                         self.log(f"[x] Rekey error: {e}")
                 elif t == "rekey_ack":
@@ -549,7 +549,7 @@ class NullMessenger(ctk.CTk):
                         sess["sess_pw"] = self._derive_session_password(shared)
                         sess["rekey_priv"] = None
                         sess["count"] = 0
-                        self.set_status("Session-Key aktiv (rotated)")
+                        self.set_status("Session key active (rotated)")
                     except Exception as e:
                         self.log(f"[x] Rekey-ack error: {e}")
                 else:
@@ -563,7 +563,7 @@ class NullMessenger(ctk.CTk):
             self.log("[-] Chat disconnected.")
 
     def _handle_file_client(self, sock: socket.socket):
-        # Nicht mehr genutzt: Dateiübertragung läuft über Chat-Socket mit Session-Key
+        # Not used anymore: file transfer goes over chat socket with session key
         try: sock.close()
         except Exception: pass
 
@@ -594,11 +594,11 @@ class NullMessenger(ctk.CTk):
                 cli_priv = x25519.X25519PrivateKey.generate()
                 cli_pub = cli_priv.public_key().public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
                 send_json(self.active_sock, {"type":"keyex","pubkey": base64.b64encode(cli_pub).decode("ascii")})
-                self.set_status("Warte auf Schlüsselaustausch…")
+                self.set_status("Waiting for key exchange…")
                 
                 resp = recv_json(self.active_sock)
                 if resp.get("type") != "keyex":
-                    messagebox.showerror("Handshake error", "Server sandte kein keyex."); return
+                    messagebox.showerror("Handshake error", "Server did not send keyex."); return
                 try:
                     srv_pub = x25519.X25519PublicKey.from_public_bytes(base64.b64decode(resp.get("pubkey","")))
                     # Signed server identity (optional verification)
@@ -615,19 +615,19 @@ class NullMessenger(ctk.CTk):
                             self.server_sid_fp = _fp_hex_ed25519(sid_pub_bytes)
                             if self.server_sid_fp in self.trusted:
                                 self.server_verified = True
-                            self.set_status("Session-Key aktiv ({})".format("verifiziert" if self.server_verified else "UNVERIF."))
+                            self.set_status("Session key active ({})".format("verified" if self.server_verified else "UNVERIFIED"))
                         except Exception as e:
                             self.set_status(f"Warning: signature verification failed: {e}")
                 except Exception as e:
                     messagebox.showerror("Handshake error", f"Invalid server public key: {e}"); return
                 shared = cli_priv.exchange(srv_pub)
                 self.session_password = self._derive_session_password(shared)
-                self.set_status("Session-Key aktiv")
+                self.set_status("Session key active")
                 # hello
-                nick = self.entry_nick.get().strip() or "ich"
+                nick = self.entry_nick.get().strip() or "me"
                 send_json(self.active_sock, {"type":"hello","nick": nick, "room": self.room, "version": 1, "client_id": _get_client_id()})
                 self.set_connected_state(True)
-                # Start Receiver-Thread für Rekey-Acks (und evtl. Server-Nachrichten in Zukunft)
+                # Start receiver thread for rekey acks (and possibly server messages in the future)
                 threading.Thread(target=self._client_recv_loop, daemon=True).start()
                 return
             except Exception as e:
@@ -650,7 +650,7 @@ class NullMessenger(ctk.CTk):
                         shared = priv.exchange(peer_pub)
                         self.session_password = self._derive_session_password(shared)
                         send_json(s, {"type":"rekey_ack","pubkey": base64.b64encode(pub).decode("ascii")})
-                        self.set_status("Session-Key aktiv (rotated)")
+                        self.set_status("Session key active (rotated)")
                     except Exception as e:
                         self.set_status(f"Rekey error: {e}")
                 elif t == "rekey_ack":
@@ -662,14 +662,14 @@ class NullMessenger(ctk.CTk):
                         shared = priv.exchange(peer_pub)
                         self.session_password = self._derive_session_password(shared)
                         self._rekey_priv = None
-                        self.set_status("Session-Key aktiv (rotated)")
+                        self.set_status("Session key active (rotated)")
                     except Exception as e:
                         self.set_status(f"Rekey-ack error: {e}")
                 elif t == "sys":
                     # Systemnachrichten
                     self.log(f"[sys] {obj.get('msg','')}")
                 else:
-                    # aktuell ignorieren (Server sendet keine Chat-Echos)
+                    # aktuell ignorieren (Server sendet none Chat-Echos)
                     pass
         except Exception:
             pass
@@ -687,7 +687,7 @@ class NullMessenger(ctk.CTk):
 
     def _aad_for(self, kind:str, name:str=None, size:int=None, counter:int=0, peer_client_id:str="") -> str:
         # room|nick|client_id|counter[|file|name|size]
-        nick = (self.entry_nick.get().strip() or "ich")
+        nick = (self.entry_nick.get().strip() or "me")
         parts = [str(self.room), str(nick), str(peer_client_id), str(counter)]
         if kind=="file" and name is not None and size is not None:
             parts += ["file", str(name), str(size)]
@@ -697,7 +697,7 @@ class NullMessenger(ctk.CTk):
     def send_msg(self):
         text = self.entry.get().strip()
         if not text: return
-        nick = self.entry_nick.get().strip() or "ich"
+        nick = self.entry_nick.get().strip() or "me"
 
         # Admin (server)
         if text.lower().startswith("/fingerprint"):
@@ -712,12 +712,12 @@ class NullMessenger(ctk.CTk):
                         fp = _fp_hex_ed25519(self.server_id_pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw))
                         self.log(f"[Server-Fingerprint] {fp}")
                 except Exception as e:
-                    self.set_status(f"Fingerprint Fehler: {e}")
+                    self.set_status(f"Fingerprint error: {e}")
             else:
                 if self.server_sid_fp:
                     self.log(f"[Server-Fingerprint] {self.server_sid_fp}")
                 else:
-                    self.set_status("Kein Server-Fingerprint (noch nicht verbunden?)")
+                    self.set_status("No server fingerprint (not connected yet?)")
             self.entry.delete(0,"end"); return
         if text.lower().startswith("/trust "):
             val = (text.split(" ",1)[1] if " " in text else "").strip().lower()
@@ -727,16 +727,16 @@ class NullMessenger(ctk.CTk):
                     _save_trust_store(APP_DIR, self.trusted)
                     self.set_status(f"Trusted: {val[:16]}…")
                     if self.server_sid_fp == val:
-                        self.server_verified = True; self.set_status("Session-Key aktiv (verifiziert)")
+                        self.server_verified = True; self.set_status("Session key active (verified)")
                 except Exception as e:
-                    self.set_status(f"Trust speichern fehlgeschlagen: {e}")
+                    self.set_status(f"Failed to save trust store: {e}")
             else:
-                self.set_status("Bitte 64-stelligen Hex-Fingerprint angeben.")
+                self.set_status("Please provide a 64-char hex fingerprint.")
             self.entry.delete(0,"end"); return
         if text.lower().startswith("/color "):
             val = text.split(" ",1)[1].strip()
             if not (len(val) in (4,7) and val.startswith("#") and all(c in "0123456789abcdefABCDEF#" for c in val)):
-                self.set_status("Ungültige Farbe. Nutze z.B. #666666 oder #6a6")
+                self.set_status("Invalid color. Use e.g. #666666 or #6a6")
                 self.entry.delete(0,"end"); return
             self.my_color = val
             # an Server melden, falls client
@@ -745,7 +745,7 @@ class NullMessenger(ctk.CTk):
                     send_json(self.active_sock, {"type":"color","value": val})
             except Exception:
                 pass
-            self.set_status(f"Farbe gesetzt auf {val}"); self.entry.delete(0,"end"); return
+            self.set_status(f"Color set to {val}"); self.entry.delete(0,"end"); return
         
         if self.role == "server" and text.startswith("/"):
             parts = text.split(); cmd = parts[0].lower(); a1=parts[1] if len(parts)>1 else None; a2=parts[2] if len(parts)>2 else None
@@ -754,10 +754,10 @@ class NullMessenger(ctk.CTk):
                     fp = _fp_hex_ed25519(self.server_id_pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw))
                     self.log(f"[Server-Fingerprint] {fp}")
                 except Exception as e:
-                    self.set_status(f"Fingerprint Fehler: {e}")
+                    self.set_status(f"Fingerprint error: {e}")
                 self.entry.delete(0,"end"); return
             if cmd == "/users":
-                try: names=[self.clients_map.get(s,"Peer") for s in self.clients]; self.set_status("Users: " + (", ".join(names) if names else "Keine Nutzer"))
+                try: names=[self.clients_map.get(s,"Peer") for s in self.clients]; self.set_status("Users: " + (", ".join(names) if names else "none"))
                 except Exception: pass; self.entry.delete(0,"end"); return
             if cmd == "/bans":
                 try:
@@ -765,15 +765,15 @@ class NullMessenger(ctk.CTk):
                     for cid, until in self.bans.items():
                         if until is None: items.append(f"{cid}: forever")
                         else: items.append(f"{cid}: {int(max(0, until-now))}s")
-                    self.set_status("Bans: " + (", ".join(items) if items else "keine"))
+                    self.set_status("Bans: " + (", ".join(items) if items else "none"))
                 except Exception: pass; self.entry.delete(0,"end"); return
             if cmd == "/ban" and a1:
                 cid = self.nick_to_id.get(a1, a1)
                 if not a2: self.set_status('Usage: /ban <nick|id> <minutes|forever>'); self.entry.delete(0,"end"); return
-                if a2.lower()=="forever": self.bans[cid]=None; self.set_status(f"Gebannt: {cid} forever")
+                if a2.lower()=="forever": self.bans[cid]=None; self.set_status(f"Banned: {cid} forever")
                 else:
-                    try: minutes=int(a2); self.bans[cid]=time.time()+minutes*60; self.set_status(f"Gebannt: {cid} für {minutes} min")
-                    except Exception: self.set_status('Ungültige Dauer. Zahl oder "forever".'); self.entry.delete(0,"end"); return
+                    try: minutes=int(a2); self.bans[cid]=time.time()+minutes*60; self.set_status(f"Banned: {cid} for {minutes} min")
+                    except Exception: self.set_status('Invalid duration. Number or "forever".'); self.entry.delete(0,"end"); return
                 to_drop=[s for s,idv in self.clients_id_map.items() if idv==cid]
                 for s in to_drop:
                     try: self.clients.discard(s); self.clients_map.pop(s,None); self.clients_id_map.pop(s,None); self.sessions.pop(s,None); s.close()
@@ -782,9 +782,9 @@ class NullMessenger(ctk.CTk):
             if cmd == "/unban" and a1:
                 cid=self.nick_to_id.get(a1,a1)
                 if cid in self.bans: self.bans.pop(cid,None); self.set_status(f"Unbanned: {cid}")
-                else: self.set_status("Nicht gebannt.")
+                else: self.set_status("Not banned.")
                 self.entry.delete(0,"end"); return
-            self.set_status("Unbekannt: /users, /bans, /ban, /unban"); self.entry.delete(0,"end"); return
+            self.set_status("Unknown: /users, /bans, /ban, /unban"); self.entry.delete(0,"end"); return
 
         try:
             if self.role == "server":
@@ -845,7 +845,7 @@ class NullMessenger(ctk.CTk):
                 self._client_count = cnt + 1
                 self.log_colored(f"{nick}: {text}", self.my_color); self.entry.delete(0,"end")
         except Exception as e:
-            messagebox.showerror("Send fehlgeschlagen", str(e))
+            messagebox.showerror("Send failed", str(e))
 
     def send_file(self):
         path = filedialog.askopenfilename()
@@ -855,7 +855,7 @@ class NullMessenger(ctk.CTk):
             with open(p, "rb") as f: data=f.read()
             # Verschlüsseln mit Session-Key
             if self.role == "server":
-                if not self.clients: messagebox.showinfo("Note","Kein Client verbunden."); return
+                if not self.clients: messagebox.showinfo("Note","No client connected."); return
                 dead=[]
                 for c in list(self.clients):
                     try:
@@ -896,10 +896,10 @@ class NullMessenger(ctk.CTk):
                     chunk=enc[off:off+65536]; self.active_sock.sendall(chunk); off += len(chunk)
             self.log(f"📦 File sent: {p.name} ({p.stat().st_size} Bytes)")
         except Exception as e:
-            messagebox.showerror("Send fehlgeschlagen", str(e))
+            messagebox.showerror("Send failed", str(e))
 
 
-    # --- NullCrypto manuell: Eingabe-Text ---
+    # --- NullCrypto manual: Eingabe-Text ---
     def _nc_encrypt_entry(self):
         try:
             pw = (self.nc_pw.get().strip() if hasattr(self, 'nc_pw') else '')
@@ -911,7 +911,7 @@ class NullMessenger(ctk.CTk):
             aad = self.room
             out = encrypt_text(text, pw, aad_text=aad, kdf_profile=self.kdf_profile, add_prefix=False)
             self.entry.delete(0, 'end'); self.entry.insert(0, out)
-            self.set_status('NullCrypto: Text encrypted (manuell)')
+            self.set_status('NullCrypto: Text encrypted (manual)')
         except Exception as e:
             self.set_status(f'NullCrypto Encrypt error: {e}')
 
@@ -926,11 +926,11 @@ class NullMessenger(ctk.CTk):
             aad = self.room
             out = decrypt_text(blob, pw, aad_text=aad, kdf_profile=self.kdf_profile)
             self.entry.delete(0, 'end'); self.entry.insert(0, out)
-            self.set_status('NullCrypto: Text decrypted (manuell)')
+            self.set_status('NullCrypto: Text decrypted (manual)')
         except Exception as e:
             self.set_status(f'NullCrypto Decrypt error: {e}')
 
-    # --- NullCrypto manuell: Dateien ---
+    # --- NullCrypto manual: Dateien ---
     def _nc_encrypt_file_dialog(self):
         try:
             pw = (self.nc_pw.get().strip() if hasattr(self, 'nc_pw') else '')

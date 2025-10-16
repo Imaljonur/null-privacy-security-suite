@@ -176,7 +176,7 @@ class DNSWatcherApp(ctk.CTk):
         self.tree.heading("time", text="Time")
         self.tree.heading("src",  text="Source")
         self.tree.heading("qname",text="Domain")
-        self.tree.heading("type", text="Typee")
+        self.tree.heading("type", text="Type")
         self.tree.heading("flag", text="Classification")
 
         self.tree.column("time", width=130, anchor="w")

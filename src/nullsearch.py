@@ -107,7 +107,7 @@ def _btn_subtle(parent, text, command=None):
     return ctk.CTkButton(parent, text=text, fg_color="#1F2933", hover_color="#25313B", command=command)
 
 # =====================
-# Globale Variablen (LOGIK)
+# Global variables (LOGIC)
 # =====================
 BLOCK_HINTS = set()
 SCORING_OK = 0
@@ -130,7 +130,7 @@ date_filter_var = None
 more_button = None
 
 # =====================
-# User-Agents (LOGIK)
+# User-Agents (LOGIC)
 # =====================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
@@ -142,7 +142,7 @@ USER_AGENTS = [
 
 MINIMAL_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 # =====================
@@ -205,10 +205,10 @@ def tor_post(url, engine="DuckDuckGo", data=None, **kwargs):
     return session.post(url, data=data, timeout=timeout_seconds, **kwargs)
 
 # =====================
-# Tor prüfen (LOGIK – stabiler)
+# Check Tor connection (LOGIC – more robust)
 # =====================
 def check_tor_connection():
-    """Verwendet die API von check.torproject.org für robustere Erkennung."""
+    """Use check.torproject.org API for robust Tor detection."""
     try:
         r = tor_get("https://check.torproject.org/api/ip")
         return '"IsTor":true' in r.text
@@ -216,7 +216,7 @@ def check_tor_connection():
         return False
 
 # =====================
-# Suchmaschinen (LOGIK)
+# Search engines (LOGIC)
 # =====================
 
 def _compact_spaces(s: str) -> str:
@@ -348,7 +348,23 @@ def perform_onion_search(query, page=0):
     return perform_duckduckgo_search(query + " site:.onion", page)
 
 # =====================
-# Inhaltsbewertung (LOGIK)
+# >>> ADDITIVE: neue Engines (Gov & Scholarly)
+# =====================
+def perform_gov_search(query, page=0):
+    # AT, DE, EU, UK, US – offizielle Seiten
+    gov_filter = " (site:.gv.at OR site:.de OR site:.eu OR site:.gov.uk OR site:.gov OR site:whitehouse.gov)"
+    return perform_duckduckgo_search(query + gov_filter, page)
+
+def perform_scholarly_search(query, page=0):
+    # Studies/Authorities: NCBI/PubMed/NIH/WHO/CDC/EMA/ECDC
+    sci_filter = (
+        " (site:ncbi.nlm.nih.gov OR site:pubmed.ncbi.nlm.nih.gov OR site:nih.gov"
+        " OR site:who.int OR site:cdc.gov OR site:ema.europa.eu OR site:ecdc.europa.eu)"
+    )
+    return perform_duckduckgo_search(query + sci_filter, page)
+
+# =====================
+# Content scoring (LOGIC)
 # =====================
 
 
@@ -435,7 +451,7 @@ def fetch_and_score(url, query):
             syns = get_synonyms(word)
             for syn in syns:
                 weight = 3 if syn == word else 1
-                # wichtig: echtes \b nutzen
+                # important: use real \b word boundaries
                 total_score += weight * len(re.findall(rf"\b{re.escape(syn)}\b", text, re.I))
 
         try:
@@ -492,7 +508,7 @@ def live_content_relevance_parallel(results, query, engine, max_workers=6):
     return sorted(results, key=lambda x: x.get("score", 0), reverse=True)
 
 # =====================
-# Lokales Re-Ranking (LOGIK)
+# Local re-ranking (LOGIC)
 # =====================
 def score_by_metadata(item, query):
     title = (item.get("title") or "").lower()
@@ -589,8 +605,14 @@ def run_search(query, engine, page):
         results = perform_duckduckgo_search(query, page)
     elif engine == "BraveSearch":
         results = perform_brave_search(query, page)
-    else:
+    elif engine == "OnionSearch":
         results = perform_onion_search(query, page)
+    elif engine == "GovSearch":  # <<< additive
+        results = perform_gov_search(query, page)
+    elif engine == "Scholarly":  # <<< additive
+        results = perform_scholarly_search(query, page)
+    else:
+        results = perform_duckduckgo_search(query, page)
 
     if stop_event.is_set():
         return
@@ -740,7 +762,10 @@ def main():
 
     _label(fcard, "Search engine:", muted=True).grid(row=0, column=0, padx=10, pady=(10,4), sticky="w")
     search_engine_var = tk.StringVar(value="DuckDuckGo")
-    engine_menu = ctk.CTkOptionMenu(fcard, variable=search_engine_var, values=["DuckDuckGo","BraveSearch","OnionSearch"])
+    engine_menu = ctk.CTkOptionMenu(
+        fcard, variable=search_engine_var,
+        values=["DuckDuckGo","BraveSearch","OnionSearch","GovSearch","Scholarly"]  # <<< additive
+    )
     engine_menu.grid(row=1, column=0, padx=10, pady=(0,10), sticky="ew")
 
     _label(fcard, "Date filter:", muted=True).grid(row=0, column=1, padx=10, pady=(10,4), sticky="w")

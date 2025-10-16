@@ -75,7 +75,7 @@ def ai_threat_check(proc, rip, country, port, data_sent, org, conn_counts, warn_
     if conn_counts[rip] > 20:
         messages.append(f"[AI] 🧠 Possible port scan: {conn_counts[rip]} connections to {rip} by {proc}")
     if country == "?" and org == "?" and not rip.startswith("192.168"):
-        messages.append(f"[AI] ❓ Target anonymous & unknown: {rip} von {proc}")
+        messages.append(f"[AI] ❓ Target anonymous & unknown: {rip} by {proc}")
     if proc.lower() in SUSPICIOUS_PROCESSES and data_sent != "-" and isinstance(data_sent, int) and data_sent > 10**7:
         messages.append(f"[AI] 🔥 Unusual traffic: {proc} is sending {round(data_sent/1_000_000,1)} MB")
     for msg in messages:
@@ -273,7 +273,7 @@ def main():
                     background=BG_CARD, foreground=ACCENT,
                     font=("Consolas", 10, "bold"))
 
-    columns = ("Program", "Locale Adresse", "Remoteadresse", "Domain", "Geo / Provider", "Status", "Traffic(Bytes)")
+    columns = ("Program", "Local Address", "Remote Address", "Domain", "Geo / Provider", "Status", "Traffic(Bytes)")
     tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="browse")
     for col in columns:
         tree.heading(col, text=col)

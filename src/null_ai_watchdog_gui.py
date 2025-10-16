@@ -31,6 +31,32 @@ import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 import psutil
 import requests
+
+import threading
+from time import monotonic
+
+_HTTP = requests.Session()
+_GEO_CACHE = {}
+_GEO_LOCK = threading.RLock()
+_GEO_TTL = 3600  # 1h
+
+def geoip_cached(ip: str):
+    now = monotonic()
+    with _GEO_LOCK:
+        hit = _GEO_CACHE.get(ip)
+        if hit and now - hit[0] < _GEO_TTL:
+            return hit[1]
+    try:
+        resp = _HTTP.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
+        country = f"{resp.get('country_name','Unknown')} ({resp.get('country','XX')})"
+        abuse = "⚠ Abuse" if (resp.get('asn','') or '').startswith(("AS",)) and "hosting" in (resp.get('org','').lower()) else "✓ Clean"
+        val = (country, abuse)
+    except Exception:
+        val = ("Unknown (XX)", "✓ Clean")
+    with _GEO_LOCK:
+        _GEO_CACHE[ip] = (now, val)
+    return val
+
 try:
     from PIL import Image, ImageDraw
 except Exception:
@@ -110,6 +136,16 @@ def rotate_jsonl_if_needed(max_bytes=2_000_000, backups=4):
 
 def jsonl_log(obj: dict):
     try:
+        lvl = (obj.get('level','') or '').lower()
+        # light health hook
+        try:
+            health_note_event(level=lvl, suspicious=(lvl in ('warn','error')), action=False)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
         rotate_jsonl_if_needed()
         with open(JSON_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -188,6 +224,7 @@ class ConfigManager:
 
             # Intervals (seconds)
             "intervals": {
+                "proc_resource_check": 20,
                 "ai_watchdog": 4,
                 "dll_scan": 30,
                 "keylogger_proc": 30,
@@ -202,6 +239,10 @@ class ConfigManager:
             # DLL scan limits
             "dll_scan_per_proc_min_gap": 120,   # seconds between scans per process
             "dll_suspicious_markers": ["keylog","hook","inject","spy"],
+            "thread_threshold": 150,
+            "handle_threshold": 2000,
+            "suspicious_user_dirs": ["AppData\\Local\\Temp", "AppData\\Roaming", "Temp"],
+            "admin_sensitive_procs": ["notepad.exe","wordpad.exe","calc.exe","chrome.exe","firefox.exe"],
 
             # Unusual process names for outbound
             "unusual_processes": ["notepad.exe","wordpad.exe","explorer.exe","winword.exe","excel.exe","calc.exe"],
@@ -450,9 +491,15 @@ class AIWatchdogApp(ctk.CTk):
         self.is_monitoring = ctk.BooleanVar(value=False)
         self.stop_event = threading.Event()
         self.start_time = time.time()
+        try:
+            _ = list(psutil.process_iter(["pid","name","exe","open_files"]))
+        except Exception:
+            self.log("⚠️ Limited access: some checks may require administrator rights.", "#FFD500")
+
         self.monitor_threads = []
         self.counters = {"events":0, "warn":0, "honey":0, "anom":0}
         self._log_lock = threading.RLock()
+        self._log_queue = queue.Queue()
 
         # caches & trackers
         self._last_honey_access_report = 0.0
@@ -483,7 +530,7 @@ class AIWatchdogApp(ctk.CTk):
             self.log("Auto: creating honeytokens …", FG_MUTED)
             ensure_all_honeytokens(CONFIG, self._log_color)
         else:
-            self.log("ℹ Automatic creation of honeytokens is disabled.", FG_WARN)
+            self.log("ℹ Auto-creation of honeytokens is off.", FG_WARN)
 
         # Dummy events
         self._emit_dummy_events()
@@ -636,9 +683,15 @@ class AIWatchdogApp(ctk.CTk):
             self.lbl_events.configure(text=str(self.counters["events"]))
 
     def log(self, text, color=FG_OK):
-        self._log_color(text, color)
+        # statt direkt UI zu beschreiben: Queue nutzen
+        try:
+            ts = time.strftime('%H:%M:%S')
+            self._log_queue.put((text, color, ts))
+            _logger.info(text)
+            jsonl_log({"ts": time.strftime('%Y-%m-%d %H:%M:%S'), "msg": text})
+        except Exception:
+            pass
 
-    # ---------- Actions ----------
     def start_monitoring(self):
         if self.is_monitoring.get():
             return
@@ -647,6 +700,11 @@ class AIWatchdogApp(ctk.CTk):
         self._set_state("running")
         self.log("Monitoring started.", ACCENT)
         ints = CONFIG.get("intervals", {})
+
+        try:
+            _ = list(psutil.process_iter(["pid","name","exe","open_files"]))
+        except Exception:
+            self.log("⚠️ Limited access: some checks may require administrator rights.", "#FFD500")
 
         self.monitor_threads = [
             threading.Thread(target=self.ai_watchdog_loop, args=(ints.get("ai_watchdog",4),), daemon=True),
@@ -657,6 +715,7 @@ class AIWatchdogApp(ctk.CTk):
             threading.Thread(target=self.refresh_tor_ips_periodically, args=(ints.get("tor_refresh",3600),), daemon=True),
             threading.Thread(target=self.detect_tor_traffic, args=(ints.get("tor_detect",30),), daemon=True),
             threading.Thread(target=self.monitor_honeytoken, args=(ints.get("honeytoken",25),), daemon=True),
+            threading.Thread(target=self.process_resource_check, args=(ints.get("proc_resource_check",20),), daemon=True),
             threading.Thread(target=self.check_dns_leaks, args=(ints.get("dns_leak",300),), daemon=True),
         ]
         for t in self.monitor_threads:
@@ -837,6 +896,7 @@ class AIWatchdogApp(ctk.CTk):
                 "enable_geoip": bool(geo_var.get()),
                 "enable_hostname_lookup": bool(host_var.get()),
                 "intervals": {
+                "proc_resource_check": 20,
                     "ai_watchdog": to_int(ai_var, 4),
                     "dll_scan": to_int(dll_var, 30),
                     "honeytoken": to_int(hon_var, 25),
@@ -894,7 +954,7 @@ class AIWatchdogApp(ctk.CTk):
                     entries.remove(selected)
                     listbox.delete(sel_start, sel_end)
             except Exception:
-                self.log("⚠️ Nothing selected or error while removing", FG_WARN)
+                self.log("⚠️ Nothing selected or error removing", FG_WARN)
         ctk.CTkButton(editor, text="Add", command=add_entry).pack(pady=2)
         ctk.CTkButton(editor, text="Remove selection", command=remove_selected).pack(pady=2)
         def save_and_close():
@@ -931,7 +991,9 @@ class AIWatchdogApp(ctk.CTk):
         data = []
         start = time.time()
         while time.time() - start < duration_sec and not self.stop_event.is_set():
-            for conn in psutil.net_connections(kind='inet'):
+            for conn in psutil.net_connections(kind='tcp'):
+                if conn.status != psutil.CONN_ESTABLISHED:
+                    continue
                 ip = conn.raddr.ip if conn.raddr else None
                 pid = conn.pid
                 if ip and pid:
@@ -945,11 +1007,22 @@ class AIWatchdogApp(ctk.CTk):
                             pass
                     hour = time.localtime().tm_hour
                     try:
-                        cpu = psutil.Process(pid).cpu_percent(interval=0.02)
+                        pp = psutil.Process(pid)
+                        cpu = pp.cpu_percent(interval=0.02)
+                        try:
+                            mem = pp.memory_percent()
+                        except Exception:
+                            mem = 0.0
+                        try:
+                            th = pp.num_threads()
+                        except Exception:
+                            th = 0
                     except Exception:
                         cpu = 0.0
-                    data.append([pid % 1000, abroad, hour, cpu])
-            self.stop_event.wait(1.0)
+                        mem = 0.0
+                        th = 0
+                    data.append([pid % 1000, abroad, hour, cpu, mem, th])
+        self.stop_event.wait(1.0)
         try:
             clf = IsolationForest(contamination=0.01)
             clf.fit(data)
@@ -959,6 +1032,68 @@ class AIWatchdogApp(ctk.CTk):
             self.log("✅ Auto‑Learn finished & model saved.", ACCENT)
         except Exception as e:
             self.log(f"❌ Auto‑Learn error: {e}", FG_BAD)
+
+    def process_resource_check(self, interval_sec:int):
+        """Heuristics: high threads/handles, suspicious Temp/AppData executables, unexpected elevation."""
+        thread_thr = int(CONFIG.get("thread_threshold", 150))
+        handle_thr = int(CONFIG.get("handle_threshold", 2000))
+        user_dirs = [os.path.expandvars(f"%USERPROFILE%\\{d}") for d in CONFIG.get("suspicious_user_dirs", [])]
+        user_dirs = [os.path.normcase(os.path.normpath(x)) for x in user_dirs if x]
+        admin_sensitive = set((n or "").lower() for n in CONFIG.get("admin_sensitive_procs", []))
+
+        def in_suspicious_user_dir(path:str)->bool:
+            try:
+                n = os.path.normcase(os.path.normpath(path))
+                return any(n.startswith(base) for base in user_dirs)
+            except Exception:
+                return False
+
+        def proc_elevated_windows(proc)->bool:
+            if not IS_WIN:
+                return False
+            try:
+                uname = (proc.username() or "").lower()
+                if "system" in uname or "administrator" in uname:
+                    return True
+            except Exception:
+                return False
+            return False
+
+        while self.is_monitoring.get() and not self.stop_event.is_set():
+            try:
+                for proc in psutil.process_iter(['pid','name','exe']):
+                    try:
+                        p = psutil.Process(proc.info['pid'])
+                        # threads
+                        try:
+                            n_threads = p.num_threads()
+                        except Exception:
+                            n_threads = 0
+                        # handles (Windows only)
+                        n_handles = 0
+                        if IS_WIN and hasattr(p, "num_handles"):
+                            try:
+                                n_handles = p.num_handles()
+                            except Exception:
+                                n_handles = 0
+
+                        if n_threads >= thread_thr or (IS_WIN and n_handles >= handle_thr):
+                            self._log_color(f"⚠️ Resource spike: {proc.info.get('name','?')} (PID {p.pid}) – threads={n_threads}, handles={n_handles}", "#FFD500")
+
+                        exe = proc.info.get('exe') or ""
+                        if exe and in_suspicious_user_dir(exe):
+                            self._log_color(f"⚠️ Executable in Temp/AppData: {exe} (PID {p.pid})", "#FFD500")
+
+                        if (proc.info.get('name') or '').lower() in admin_sensitive and proc_elevated_windows(p):
+                            self._log_color(f"⚠️ Unexpected elevation: {proc.info.get('name')} (PID {p.pid}) running with admin rights", "#FF0000")
+
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            self.stop_event.wait(max(2.0, float(interval_sec)))
 
     # Firewall helpers
     def firewall_rule_exists(self, rule_name: str) -> bool:
@@ -1076,7 +1211,9 @@ class AIWatchdogApp(ctk.CTk):
         last_seen = {}
         while self.is_monitoring.get() and not self.stop_event.is_set():
             try:
-                for conn in psutil.net_connections(kind='inet'):
+                for conn in psutil.net_connections(kind='tcp'):
+                    if conn.status != psutil.CONN_ESTABLISHED:
+                        continue
                     ip = conn.raddr.ip if conn.raddr else None
                     pid = conn.pid
                     if not ip or not pid:
@@ -1103,15 +1240,8 @@ class AIWatchdogApp(ctk.CTk):
             self.stop_event.wait(max(0.5, float(interval_sec)))
 
     def get_ip_info(self, ip):
-        try:
-            # HTTPS Geo provider (ipapi.co) for privacy
-            resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
-            country = f"{resp.get('country_name','Unknown')} ({resp.get('country','XX')})"
-            abuse = "⚠ Abuse" if (resp.get('asn','') or '').startswith(("AS",)) and (resp.get('org','') or '').lower().find("hosting") >= 0 else "✓ Clean"
-        except Exception:
-            country = "Unknown (XX)"
-            abuse = "✓ Clean"
-        return country, abuse
+        return geoip_cached(ip)
+
 
     def scan_loaded_dlls(self, interval_sec: int):
         suspicious_markers = [s.lower() for s in CONFIG.get("dll_suspicious_markers", [])]
@@ -1128,7 +1258,7 @@ class AIWatchdogApp(ctk.CTk):
                     try:
                         proc = psutil.Process(pid)
                         new_paths = set()
-                        for mm in proc.memory_maps():
+                        for mm in proc.memory_maps(grouped=True):
                             path = (mm.path or "").lower()
                             if not path:
                                 continue
@@ -1342,14 +1472,19 @@ class AIWatchdogApp(ctk.CTk):
         while self.is_monitoring.get() and not self.stop_event.is_set():
             try:
                 output = subprocess.check_output("ipconfig /all", shell=True, encoding="utf-8", errors="ignore")
+                if not hasattr(self, "_last_dns_lines"):
+                    self._last_dns_lines = set()
+                lines = set()
                 for line in output.splitlines():
-                    if ("DNS-Server" in line or "DNS Servers" in line) or re.search(r"(8\\.8\\.8\\.8|1\\.1\\.1\\.1|9\\.9\\.9\\.9)", line):
-                        self._log_color(f"⚠️ Possible DNS leak: {line.strip()}", FG_WARN)
+                    if ("DNS-Server" in line or "DNS Servers" in line) or re.search(r"(8\.8\.8\.8|1\.1\.1\.1|9\.9\.9\.9)", line):
+                        lines.add(line.strip())
+                new_lines = lines - self._last_dns_lines
+                for L in new_lines:
+                    self._log_color(f"⚠️ Possible DNS leak: {L}", FG_WARN)
+                self._last_dns_lines = lines
             except Exception as e:
                 self._log_color(f"❌ DNS leak check error: {e}", FG_BAD)
             self.stop_event.wait(max(5.0, float(interval_sec)))
-
-    # TOR
     def refresh_tor_ips_periodically(self, interval_sec: int):
         while self.is_monitoring.get() and not self.stop_event.is_set():
             try:
@@ -1365,7 +1500,9 @@ class AIWatchdogApp(ctk.CTk):
         self.known_tor_ips = getattr(self, "known_tor_ips", set())
         while self.is_monitoring.get() and not self.stop_event.is_set():
             try:
-                for conn in psutil.net_connections(kind='inet'):
+                for conn in psutil.net_connections(kind='tcp'):
+                    if conn.status != psutil.CONN_ESTABLISHED:
+                        continue
                     ip = conn.raddr.ip if conn.raddr else None
                     pid = conn.pid
                     if ip and pid and ip in self.known_tor_ips:
@@ -1449,14 +1586,39 @@ class AIWatchdogApp(ctk.CTk):
             self.state_label.configure(text_color=FG_MUTED)
 
     def _tick(self):
+        try:
+            while True:
+                text, color_hex, ts = self._log_queue.get_nowait()
+                try:
+                    tag = color_hex
+                    self.log_box.insert("end", f"{ts}  |  {text}\n", (tag,))
+                    self.log_box.tag_config(tag, foreground=color_hex)
+                    self.log_box.see("end")
+                except Exception:
+                    pass
+                # counters aktualisieren
+                self.counters["events"] += 1
+                if "⚠" in text or "error" in text.lower():
+                    self.counters["warn"] += 1
+                    self.lbl_warn.configure(text=str(self.counters["warn"]))
+                if "Honeytoken" in text or "honeytoken" in text:
+                    self.counters["honey"] += 1
+                    self.lbl_honey.configure(text=str(self.counters["honey"]))
+                if "AI:" in text or "Anomal" in text or "anomal" in text:
+                    self.counters["anom"] += 1
+                    self.lbl_anom.configure(text=str(self.counters["anom"]))
+                self.lbl_events.configure(text=str(self.counters["events"]))
+        except Exception:
+            pass
+
         self.time_label.configure(text=time.strftime("%Y-%m-%d %H:%M:%S"))
         self.after(250, self._tick)
 
     def _emit_dummy_events(self):
-        self._log_color("🔧 Dummy: Initialization …", FG_MUTED)
-        self._log_color("ℹ️ Dummy: System check OK", ACCENT)
-        self._log_color("⚠️ Dummy: Test warning (keylogger heuristic)", FG_WARN)
-        self._log_color("✅ Dummy: Ready. Start monitoring when you want.", ACCENT)
+        self._log_color("🔧 Dummy: initialization …", FG_MUTED)
+        self._log_color("ℹ️ Dummy: system check ok", ACCENT)
+        self._log_color("⚠️ Dummy: test warning (keylogger heuristic)", FG_WARN)
+        self._log_color("✅ Dummy: ready. Start when you want.", ACCENT)
 
 # ======== run ========
 if __name__ == "__main__":
@@ -1468,4 +1630,172 @@ if __name__ == "__main__":
         pass
 
     app = AIWatchdogApp()
-    app.mainloop()
+    app.mainloop(
+)
+
+
+# ===[ Null-Additions: Anti-Noise, Surge, Parent-Child, ActionGate, Health ]===
+from time import monotonic as _mono
+from collections import deque
+import threading as _thread_add
+import time as _time_add
+
+# --- Anti-Noise helpers (de-dup by key) ---
+_EVENT_LAST = {}  # key -> (ts, count)
+
+def should_log(key: str, min_gap=3.0, burst_mark=10):
+    """Return (ok_to_log, burst_count). Suppresses duplicates within min_gap."""
+    try:
+        now = _mono()
+        ts, cnt = _EVENT_LAST.get(key, (0.0, 0))
+        if now - ts < min_gap:
+            cnt += 1
+            _EVENT_LAST[key] = (ts, cnt)
+            return False, cnt
+        _EVENT_LAST[key] = (now, 0)
+        return True, 0
+    except Exception:
+        return True, 0
+
+def log_once(key: str, obj: dict):
+    """Log JSONL once per min_gap via should_log; falls back to direct log."""
+    try:
+        ok, _ = should_log(key)
+        if ok:
+            jsonl_log(obj)
+    except Exception:
+        try:
+            jsonl_log(obj)
+        except Exception:
+            pass
+
+# --- Surge detector (file modification bursts) ---
+_SURGE = {}  # proc_name -> deque[timestamps]
+
+def note_file_touch(proc_name: str, window=10.0, threshold=60):
+    """Call this when a process touches/modifies files. Emits a WARN on surge."""
+    try:
+        t = _mono()
+        q = _SURGE.setdefault((proc_name or "?").lower(), deque())
+        q.append(t)
+        while q and (t - q[0]) > window:
+            q.popleft()
+        if len(q) >= threshold:
+            key = f"surge:{proc_name.lower()}"
+            ok, _ = should_log(key, min_gap=20.0)
+            if ok:
+                jsonl_log({
+                    "ts": datetime.utcnow().isoformat()+"Z",
+                    "level":"warn",
+                    "msg": f"File surge by {proc_name}: {len(q)} events / {window}s",
+                    "labels":{"proc": proc_name, "kind":"surge", "window_s": window, "count": len(q)}
+                })
+    except Exception:
+        pass
+
+# --- Parent-child anomaly (Office/PDF -> LOLBins) ---
+_SUSP_CHILD = ("powershell.exe","cmd.exe","wscript.exe","cscript.exe","mshta.exe","rundll32.exe")
+_PARENT_SUSP = ("winword.exe","excel.exe","powerpnt.exe","acrord32.exe","outlook.exe","explorer.exe")
+
+def check_parent_child_anomaly(pid: int):
+    try:
+        p = psutil.Process(pid)
+        parent = p.parent()
+        if not parent:
+            return
+        pn = (p.name() or "").lower()
+        pp = (parent.name() or "").lower()
+        if pn in _SUSP_CHILD and pp in _PARENT_SUSP:
+            key = f"pc:{pp}->{pn}"
+            ok, _ = should_log(key, min_gap=20.0)
+            if ok:
+                jsonl_log({
+                    "ts": datetime.utcnow().isoformat()+"Z", "level":"warn",
+                    "msg": f"Parent/Child anomaly: {pp} → {pn} (pid {pid})",
+                    "labels":{"parent": pp, "child": pn, "pid": pid}
+                })
+    except Exception:
+        pass
+
+def _pc_anomaly_loop(interval=5):
+    while True:
+        try:
+            for p in psutil.process_iter(["pid"]):
+                pid = p.info.get("pid")
+                if pid:
+                    check_parent_child_anomaly(pid)
+        except Exception:
+            pass
+        try:
+            _time_add.sleep(interval)
+        except Exception:
+            pass
+
+# --- Action gate (safe enforcement) ---
+def can_enforce(action: str):
+    """Returns (bool ok, str why). Checks admin rights and optional dry_run flag in CONFIG."""
+    try:
+        if not is_admin():
+            return False, "no_admin"
+        if isinstance(CONFIG, dict) and CONFIG.get("dry_run", False):
+            return False, "dry_run"
+    except Exception:
+        pass
+    return True, "ok"
+
+def try_block_ip(ip: str, reason="auto"):
+    """Best-effort Windows firewall block for remote IP with audit log and safety gates."""
+    try:
+        ok, why = can_enforce("block_ip")
+        if not ok:
+            jsonl_log({"ts": datetime.utcnow().isoformat()+"Z","level":"info",
+                       "msg": f"[NO-ACT] Would block {ip}", "labels":{"why": why, "reason":reason}})
+            return False
+        if not ip or ip.startswith(("127.","10.","192.168.","172.16.","172.17.","172.18.","172.19.","172.2","::1")):
+            return False
+        if IS_WIN:
+            rule = f"NullWatchdog_{ip.replace(':','_')}"
+            try:
+                subprocess.run(["netsh","advfirewall","firewall","add","rule",
+                                f"name={rule}","dir=out","action=block","remoteip", ip],
+                               check=False, capture_output=True)
+                jsonl_log({"ts": datetime.utcnow().isoformat()+"Z","level":"warn",
+                           "msg": f"Blocked remote IP {ip}", "labels":{"reason":reason}})
+                return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return False
+
+# --- Health counters (cheap one-look) ---
+_HEALTH = {"events_min":0, "susp_10m":0, "actions":0}
+_H_ROLL = deque(maxlen=600)  # ~10 min if appended every second
+
+def health_note_event(level="info", suspicious=False, action=False):
+    try:
+        t = _mono()
+        _H_ROLL.append(t)
+        if suspicious:
+            _HEALTH["susp_10m"] += 1
+        if action:
+            _HEALTH["actions"] += 1
+    except Exception:
+        pass
+
+def health_snapshot():
+    try:
+        now = _mono()
+        last_min = [x for x in _H_ROLL if now - x < 60]
+        _HEALTH["events_min"] = len(last_min)
+        return dict(_HEALTH)
+    except Exception:
+        return dict(_HEALTH)
+
+# Start background anomaly thread (daemon)
+try:
+    _t = _thread_add.Thread(target=_pc_anomaly_loop, args=(5,), daemon=True)
+    _t.start()
+except Exception:
+    pass
+# ===[ /Null-Additions ]===

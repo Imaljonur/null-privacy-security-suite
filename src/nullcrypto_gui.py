@@ -19,8 +19,8 @@ from argon2.low_level import hash_secret_raw, Type
 SALT_SIZE = 16
 NONCE_SIZE = 24
 KEY_SIZE = 32
-HEADER = b"OC2X"   # Formatkennung
-TEXT_PREFIX = "OCRYPTO:"  # historischer Marker (optional)
+HEADER = b"OC2X"   # format tag
+TEXT_PREFIX = "OCRYPTO:"  # legacy marker (optional)
 
 # ==========================
 #  KDF PRESETS (UNCHANGED)

@@ -514,7 +514,7 @@ def apply_profile(profile, use_tor=False):
         jitter = (0.25, 0.8)
         max_workers = 4 if use_tor else 6
         rps = 1.0
-    elif profile == "Aggressiv":
+    elif profile == "Aggressive":
         HTTP_TIMEOUT, TCP_TIMEOUT, TLS_TIMEOUT = 8.0, 5.0, 8.0
         jitter = (0.0, 0.2)
         max_workers = 8 if use_tor else 16
@@ -599,7 +599,7 @@ def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=905
             if banner:
                 report["banners"][p] = banner[:200]
             if is_open and p in (4444, 6667, 9001, 1337):
-                score_add(report, 1.0, f"Unusual open port {p} (häufig bei C2/IRC/Tor).")
+                score_add(report, 1.0, f"Unusual open port {p} (often used by C2/IRC/Tor).")
             time.sleep(random.uniform(*jitter))
 
     # HTTP(S) over selected ports & paths (concurrent)
@@ -628,7 +628,7 @@ def analyze(raw_target, ports, use_tor=False, tor_host="127.0.0.1", tor_port=905
                 sc = info.get("status_code")
                 bl = info.get("body_len", 0)
                 if sc in (301,302,307,308) and bl == 0:
-                    score_add(report, 0.5, f"Empty redirect at {info.get('url')} – evtl. Köder/Decoy.")
+                    score_add(report, 0.5, f"Empty redirect at {info.get('url')} – possibly Köder/Decoy.")
                 if sc in (403,404) and bl <= 100:
                     score_add(report, 0.5, f"Very short error page ({sc}, {bl}B).")
             time.sleep(random.uniform(*jitter))
@@ -812,7 +812,7 @@ def load_model(model_path: str):
         model = joblib.load(p)
         return model, None
     except Exception as e:
-        return None, f"Modell konnte nicht loaded werden: {e}"
+        return None, f"Modell konnte not loaded werden: {e}"
 
 
 def train_model(data_dir: str, out_path: str, algo: str = "logreg"):
@@ -974,7 +974,7 @@ class NullInspectorMLApp(ctk.CTk):
 
         title = ctk.CTkLabel(sb, text="null_inspector + ML", text_color=ACCENT, font=ctk.CTkFont(size=20, weight="bold"))
         title.grid(row=0, column=0, padx=16, pady=(16,4), sticky="w")
-        model_status = "loaded" if self.model_bundle else "nicht loaded"
+        model_status = "loaded" if self.model_bundle else "not loaded"
         _label(sb, f"ML model: {model_status}", muted=True).grid(row=1, column=0, padx=16, pady=(0,8), sticky="w")
 
         self.entry_target = ctk.CTkEntry(sb, placeholder_text="Domain or IP… (no http://)")
@@ -1069,7 +1069,7 @@ class NullInspectorMLApp(ctk.CTk):
             self.model_bundle = joblib.load(path)
             messagebox.showinfo("ML", f"Modell loaded: {path}")
         except Exception as e:
-            messagebox.showerror("ML", f"Konnte Modell nicht laden: {e}")
+            messagebox.showerror("ML", f"Could not load model: {e}")
 
     # --- helpers ---
     def _status(self, msg):
@@ -1079,12 +1079,12 @@ class NullInspectorMLApp(ctk.CTk):
     # --- Tab builders ---
     def _init_reasons(self, parent):
         parent.grid_columnconfigure(0, weight=1)
-        cols = ("Punkte", "Grund")
+        cols = ("Points", "Reason")
         self.tree_reasons = ttk.Treeview(parent, columns=cols, show="headings", selectmode="browse")
-        self.tree_reasons.heading("Punkte", text="Punkte")
-        self.tree_reasons.heading("Grund", text="Grund")
-        self.tree_reasons.column("Punkte", width=80, anchor="center")
-        self.tree_reasons.column("Grund", width=900, anchor="w")
+        self.tree_reasons.heading("Points", text="Points")
+        self.tree_reasons.heading("Reason", text="Reason")
+        self.tree_reasons.column("Points", width=80, anchor="center")
+        self.tree_reasons.column("Reason", width=900, anchor="w")
         self.tree_reasons.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         vsb = ttk.Scrollbar(parent, orient="vertical", command=self.tree_reasons.yview)
         self.tree_reasons.configure(yscrollcommand=vsb.set); vsb.grid(row=0, column=1, sticky="ns")
@@ -1142,7 +1142,7 @@ class NullInspectorMLApp(ctk.CTk):
         for i, lab in enumerate(labels):
             _label(parent, f"{lab}:", muted=True).grid(row=i, column=0, padx=8, pady=4, sticky="w")
             val = ctk.CTkLabel(parent, textvariable=self.tls_vars[i], text=""); val.grid(row=i, column=1, padx=8, pady=4, sticky="w")
-        _label(parent, "Fehler/Notes:", muted=True).grid(row=len(labels), column=0, padx=8, pady=6, sticky="nw")
+        _label(parent, "Errors/Notes:", muted=True).grid(row=len(labels), column=0, padx=8, pady=6, sticky="nw")
         self.txt_tls_err = _textbox(parent, height=90); self.txt_tls_err.grid(row=len(labels), column=1, sticky="ew", padx=8, pady=8)
 
     def _init_fav(self, parent):

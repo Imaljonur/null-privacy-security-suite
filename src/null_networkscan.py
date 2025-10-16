@@ -143,7 +143,7 @@ class NetworkScannerApp:
         if col in ('#4', '#5'):
             col_name = 'Vendor' if col=='#4' else 'OS'
             old = self.tree.set(item, col_name)
-            new = simpledialog.askstring(f"{col_name} edit", f"Gib {col_name} ein:", initialvalue=old)
+            new = simpledialog.askstring(f"{col_name} edit", f"Enter {col_name}:", initialvalue=old)
             if new is not None:
                 self.tree.set(item, col_name, new)
 

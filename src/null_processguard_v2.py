@@ -9,7 +9,7 @@ import os
 SUSPICIOUS_PATTERNS = ["powershell", "cmd.exe", "curl", "wget", "base64", "whoami", "reg add", "schtasks", "-enc", "-e"]
 paused = False
 
-# === Erweiterungen: Lokale Forensik-Erkennung ===
+# === Extensions: Local forensics detection ===
 import tkinter.messagebox as msgbox
 import datetime
 

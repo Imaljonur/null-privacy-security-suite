@@ -53,67 +53,130 @@ def ensure_admin_windows():
         pass
 
 # ========= Rule Loading (netsh) =========
+
 def load_rules_via_netsh():
     """
     Returns list of dicts:
     [{"name":..., "dir":..., "action":..., "program":..., "profile":..., "localport":..., "remoteport":...}, ...]
+    Strategy:
+      1) Try PowerShell (language-agnostic) JSON export of firewall rules + filters.
+      2) Fallback to parsing 'netsh' output (best-effort, with German/English labels).
     """
     if not IS_WIN:
         return []
+    # ---- 1) PowerShell JSON (preferred) ----
     try:
-        # Using German output is okay; we pick by known labels but also fall back.
-        # netsh advfirewall firewall show rule name=all
+        ps = [
+            "powershell", "-NoProfile", "-Command",
+            r"""$rules = Get-NetFirewallRule -ErrorAction SilentlyContinue;
+$items = @();
+foreach ($r in $rules) {
+  $app = $null; $port = $null;
+  try { $app  = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r -ErrorAction SilentlyContinue } catch {}
+  try { $port = Get-NetFirewallPortFilter        -AssociatedNetFirewallRule $r -ErrorAction SilentlyContinue } catch {}
+  $items += [PSCustomObject]@{
+    name      = $r.DisplayName
+    dir       = $r.Direction
+    action    = $r.Action
+    program   = if ($app) { ($app.Program -join ',') } else { '' }
+    profile   = $r.Profile
+    localport = if ($port) { ($port.LocalPort -join ',') } else { '' }
+    remoteport= if ($port) { ($port.RemotePort -join ',') } else { '' }
+  }
+}
+$items | ConvertTo-Json -Compress
+"""
+        ]
+        result = subprocess.run(ps, capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=20)
+        js = (result.stdout or "").strip()
+        if js.startswith("[") or js.startswith("{"):
+            try:
+                data = json.loads(js)
+                if isinstance(data, dict):
+                    data = [data]
+                rules = []
+                for d in data:
+                    name      = d.get("name") or d.get("DisplayName") or ""
+                    direction = d.get("dir")  or d.get("Direction")    or ""
+                    action    = d.get("action") or d.get("Action")     or ""
+                    program   = d.get("program") or ""
+                    profile   = d.get("profile") or ""
+                    lport     = d.get("localport") or ""
+                    rport     = d.get("remoteport") or ""
+                    # Normalize
+                    action_norm = "Allow" if str(action).lower().startswith("allow") else ("Block" if str(action).lower().startswith("block") else str(action))
+                    rules.append({
+                        "name": str(name),
+                        "dir": str(direction),
+                        "action": action_norm,
+                        "program": str(program) if program else "(all)",
+                        "profile": str(profile),
+                        "localport": str(lport),
+                        "remoteport": str(rport)
+                    })
+                if rules:
+                    return rules
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # ---- 2) Fallback: netsh parsing (best-effort) ----
+    try:
         result = subprocess.run(
             ["netsh", "advfirewall", "firewall", "show", "rule", "name=all"],
-            capture_output=True, text=True, encoding="utf-8", errors="ignore"
+            capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=20
         )
-        output = result.stdout + result.stderr
+        output = (result.stdout or "") + (result.stderr or "")
         if not output.strip():
             return []
-        chunks = output.split("Rule name:")[1:] or output.split("Rule Name:")[1:]
-        rules = []
-        for ch in chunks:
-            lines = [ln.strip() for ln in ch.strip().splitlines() if ln.strip()]
-            if not lines:
-                continue
-            name = lines[0]
+        # Split by localized "Rule name"/"Regelname"
+        blocks = re.split(r'(?im)^\s*(Rule\s*name|Rule\s*Name|Regelname)\s*:\s*', output)
+        chunks = []
+        if len(blocks) > 1:
+            for i in range(1, len(blocks), 2):
+                header = blocks[i]
+                rest = blocks[i+1] if i+1 < len(blocks) else ""
+                lines = [ln.strip() for ln in rest.splitlines() if ln.strip()]
+                if not lines:
+                    continue
+                name = lines[0]
+                def find_value(keys):
+                    for key in keys:
+                        for ln in lines[1:]:
+                            if ln.lower().startswith(key.lower() + ":"):
+                                parts = ln.split(":", 1)
+                                if len(parts) == 2:
+                                    return parts[1].strip()
+                    return ""
+                direction = find_value(["Direction", "Richtung"])
+                action    = find_value(["Action", "Aktion"])
+                program   = find_value(["Program", "Programm"])
+                profile   = find_value(["Profile", "Profil"])
+                lport     = find_value(["Local Port", "Lokaler Port", "Lokaler Port (Local Port)"])
+                rport     = find_value(["Remote Port", "Remoteport", "Remoteport (Remote Port)"])
 
-            def find_value(keys):
-                for key in keys:
-                    for ln in lines:
-                        if ln.lower().startswith(key.lower()):
-                            # key like "Direction:" or "Direction:"
-                            parts = ln.split(":", 1)
-                            if len(parts) == 2:
-                                return parts[1].strip()
-                return "Unbekannt"
+                al = str(action).lower()
+                if "allow" in al or "zulass" in al:
+                    action_norm = "Allow"
+                elif "block" in al or "blockier" in al:
+                    action_norm = "Block"
+                else:
+                    action_norm = action or ""
 
-            direction = find_value(["Direction", "Direction"])
-            action    = find_value(["Action", "Action"])
-            program   = find_value(["Program", "Program"])
-            profile   = find_value(["Profile", "Profilee"])
-            lport     = find_value(["Lokaler Port", "LocalPort", "Lokaler Port (Local Port)"])
-            rport     = find_value(["Remoteport", "Remote Port", "Remoteport (Remote Port)"])
-
-            # Normalize action text
-            al = action.lower()
-            if "allow" in al or "zulassen" in al or "zugelassen" in al:
-                action_norm = "Allow"
-            elif "block" in al or "blockieren" in al or "blockiert" in al:
-                action_norm = "Block"
-            else:
-                action_norm = action
-
-            rules.append({
-                "name": name,
-                "dir": direction,
-                "action": action_norm,
-                "program": program if program and program != "Alle" else "(alle)",
-                "profile": profile,
-                "localport": lport,
-                "remoteport": rport
-            })
-        return rules
+                if 'rules' not in locals() or not isinstance(rules, list):
+                    rules = []
+                rules.append({
+                    "name": name,
+                    "dir": direction or "",
+                    "action": action_norm or "",
+                    "program": program if program and program not in ("Alle",) else "(all)",
+                    "profile": profile or "",
+                    "localport": lport or "",
+                    "remoteport": rport or ""
+                })
+            return rules
+        return []
     except Exception:
         return []
 
@@ -367,7 +430,7 @@ class FirewallVisualizer(ctk.CTk):
             messagebox.showinfo("Info", "Please select a rule first.")
             return
         if not IS_WIN:
-            messagebox.showerror("Error", "Delete ist nur unter Windows verfügbar.")
+            messagebox.showerror("Error", "Delete is only available on Windows.")
             return
         if not messagebox.askyesno("Confirm", f"Really delete rule?\n{name}"):
             return
@@ -388,7 +451,7 @@ class FirewallVisualizer(ctk.CTk):
                 "labels": {"rule": name, "action": "deleted"}
             })
         except subprocess.CalledProcessError as e:
-            messagebox.showerror("Error", f"Error beim Delete:\n{e}")
+            messagebox.showerror("Error", f"Error deleting:\n{e}")
 
     def toggle_selected(self):
         name = self.selected_name
@@ -422,7 +485,7 @@ class FirewallVisualizer(ctk.CTk):
                 "labels": {"rule": name, "action": "toggled", "new_action": new_action}
             })
         except subprocess.CalledProcessError as e:
-            messagebox.showerror("Error", f"Error beim Umschalten:\n{e}")
+            messagebox.showerror("Error", f"Error toggling:\n{e}")
 
     def copy_selected(self):
         name = self.selected_name
@@ -450,7 +513,7 @@ class FirewallVisualizer(ctk.CTk):
                     w.writerow([r["name"], r["dir"], r["action"], r["program"], r["profile"], r["localport"], r["remoteport"]])
             self._flash_state(f"Exported: {path}")
         except Exception as e:
-            messagebox.showerror("Export", f"Error beim Speichern:\n{e}")
+            messagebox.showerror("Export", f"Error saving:\n{e}")
 
     # ----- Internals -----
     def _ui_pulse(self):
@@ -460,7 +523,7 @@ class FirewallVisualizer(ctk.CTk):
                 msg, payload = self.q.get_nowait()
                 if msg == "loaded":
                     self.running = False
-                    self._set_state("Rules geladen.", "ok")
+                    self._set_state("Rules loaded.", "ok")
                     self.apply_filter()
         except queue.Empty:
             pass

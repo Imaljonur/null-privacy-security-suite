@@ -1,8 +1,10 @@
-
 import customtkinter as ctk
 import psutil
 import os
 import time
+import gc
+import tempfile
+from pathlib import Path
 
 # =========================
 #  THEME (GUI ONLY CHANGE)
@@ -35,12 +37,20 @@ def _btn_primary(parent, text, command=None):
 def _btn_danger(parent, text, command=None):
     return ctk.CTkButton(parent, text=text, fg_color="#B84C4C", hover_color="#A03E3E", command=command)
 
+def _format_bytes(n: int) -> str:
+    step = 1024.0
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if n < step:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= step
+    return f"{n:.1f} PB"
+
 class RAMProtector(ctk.CTk):
     def __init__(self):
         super().__init__()
         _theme_setup()
         self.title("∅ RAM Protection")
-        self.geometry("900x520")
+        self.geometry("1020x600")
         self.configure(fg_color=BG_DARK)
 
         # Grid: Sidebar | Main
@@ -58,7 +68,23 @@ class RAMProtector(ctk.CTk):
         _label(sb, "RAM & Keylogger Protection", muted=True).grid(row=1, column=0, padx=16, pady=(0,12), sticky="w")
 
         _btn_primary(sb, "🔎 Scan for Keyloggers", self.scan).grid(row=2, column=0, padx=16, pady=(0,8), sticky="ew")
-        _btn_danger(sb, "🛑 PANIC SHRED + EXIT", self.panic).grid(row=3, column=0, padx=16, pady=(0,16), sticky="ew")
+        _btn_danger(sb, "🧹 Shred RAM", self.shred).grid(row=3, column=0, padx=16, pady=(0,8), sticky="ew")
+        _btn_danger(sb, "🧽 Clean Temp Files", self.clean_temp).grid(row=4, column=0, padx=16, pady=(0,8), sticky="ew")
+        _btn_danger(sb, "🚪 Exit", self.exit_app).grid(row=7, column=0, padx=16, pady=(8,16), sticky="ew")
+
+        # Options
+        opt = _card(sb)
+        opt.grid(row=5, column=0, padx=16, pady=(8,8), sticky="ew")
+        opt.grid_columnconfigure(0, weight=1)
+        _label(opt, "Options", muted=True).grid(row=0, column=0, padx=12, pady=(10,4), sticky="w")
+
+        self.var_dryrun = ctk.BooleanVar(value=False)
+        self.var_aggr   = ctk.BooleanVar(value=True)
+
+        self.chk_dry = ctk.CTkCheckBox(opt, text="Dry Run (show only)", variable=self.var_dryrun)
+        self.chk_aggr = ctk.CTkCheckBox(opt, text="Aggressive (Browsers & Caches)", variable=self.var_aggr)
+        self.chk_dry.grid(row=1, column=0, padx=12, pady=(4,2), sticky="w")
+        self.chk_aggr.grid(row=2, column=0, padx=12, pady=(0,10), sticky="w")
 
         # --- Main Card ---
         main = _card(self)
@@ -77,7 +103,7 @@ class RAMProtector(ctk.CTk):
         body.grid_columnconfigure(0, weight=1)
         body.grid_rowconfigure(0, weight=1)
 
-        # Result box (same role/name as original)
+        # Result box
         self.result_box = ctk.CTkTextbox(body)
         self.result_box.grid(row=0, column=0, sticky="nsew")
 
@@ -107,10 +133,189 @@ class RAMProtector(ctk.CTk):
             self.result_box.insert("end", "✅ No suspicious processes found.")
         self.status.configure(text="Done.")
 
-    def panic(self):
-        self.result_box.insert("end", "\n[PANIC] Wiping memory and closing...")
-        time.sleep(1)
-        os._exit(1)
+    def shred(self):
+        # NOTE: True RAM wiping from user-space isn't guaranteed.
+        # This attempts to purge typical Python objects and stress-allocate
+        # a temporary buffer to reduce remnants in this process.
+        self.result_box.insert("end", "\n[SHRED] Attempting to purge sensitive buffers...")
+        self.status.configure(text="Shredding...")
+        try:
+            # Clear known widgets' internal buffers
+            self.result_box.delete("0.0", "end")
+            gc.collect()
+            # Allocate a temporary buffer (~128MB) then overwrite and release
+            size_mb = 128
+            buf = bytearray(size_mb * 1024 * 1024)
+            for i in range(0, len(buf), 4096):
+                buf[i:i+4096] = b"\x00" * min(4096, len(buf) - i)
+            del buf
+            gc.collect()
+            self.result_box.insert("end", "\n[SHRED] Local buffers cleared.")
+        except Exception as e:
+            self.result_box.insert("end", f"\n[SHRED] Error: {e}")
+        finally:
+            self.status.configure(text="RAM shred attempt complete.")
+
+    # ----------------------
+    # Temp/Caches Discovery
+    # ----------------------
+    def _iter_temp_paths(self, aggressive: bool):
+        seen = set()
+        paths = []
+
+        # Primary temp dir via Python
+        paths.append(Path(tempfile.gettempdir()))
+
+        # OS-specific candidates
+        if os.name == "nt":
+            for env in ("TEMP", "TMP", "LOCALAPPDATA"):
+                p = os.getenv(env)
+                if p:
+                    if env == "LOCALAPPDATA":
+                        paths.append(Path(p) / "Temp")
+                    else:
+                        paths.append(Path(p))
+            if aggressive:
+                # Windows caches (may need perms; skip errors)
+                local = Path(os.getenv("LOCALAPPDATA", ""))
+                roaming = Path(os.getenv("APPDATA", ""))
+                # Legacy IE / Edge caches
+                paths += [
+                    local / "Microsoft" / "Windows" / "INetCache",
+                    local / "Microsoft" / "Windows" / "Temporary Internet Files",
+                ]
+                # Chromium-based caches
+                paths += [
+                    local / "Google" / "Chrome" / "User Data" / "Default" / "Cache",
+                    local / "Google" / "Chrome" / "User Data" / "Default" / "Code Cache",
+                    local / "Microsoft" / "Edge" / "User Data" / "Default" / "Cache",
+                    local / "Microsoft" / "Edge" / "User Data" / "Default" / "Code Cache",
+                    local / "BraveSoftware" / "Brave-Browser" / "User Data" / "Default" / "Cache",
+                ]
+                # Firefox profiles caches
+                ff_base = roaming / "Mozilla" / "Firefox" / "Profiles"
+                if ff_base.exists():
+                    for prof in ff_base.glob("*.default*"):
+                        paths.append(prof / "cache2")
+        else:
+            # POSIX
+            paths += [Path("/tmp"), Path("/var/tmp")]
+            xdg = os.getenv("XDG_CACHE_HOME")
+            if xdg:
+                paths.append(Path(xdg))
+            if aggressive:
+                home = Path.home()
+                # Common browser caches
+                paths += [
+                    home / ".cache",
+                    home / ".cache" / "mozilla" / "firefox",
+                    home / ".cache" / "google-chrome" / "Default" / "Cache",
+                    home / ".cache" / "google-chrome" / "Default" / "Code Cache",
+                    home / ".cache" / "chromium" / "Default" / "Cache",
+                    home / "Library" / "Caches",  # macOS umbrella
+                    home / "Library" / "Caches" / "Google" / "Chrome" / "Default" / "Cache",
+                    home / "Library" / "Caches" / "Firefox" / "Profiles",
+                    Path("/var/cache")
+                ]
+
+        # De-duplicate and keep only existing directories
+        norm = []
+        for p in paths:
+            try:
+                p = p.resolve()
+            except Exception:
+                p = Path(str(p))
+            if p in seen:
+                continue
+            seen.add(p)
+            if p.exists() and p.is_dir():
+                norm.append(p)
+        return norm
+
+    def _safe_purge_dir(self, root: Path, dry_run: bool):
+        deleted_files = 0
+        deleted_bytes = 0
+        deleted_dirs = 0
+        for base, dirs, files in os.walk(root, topdown=False):
+            base_path = Path(base)
+            # Skip our own running dir just in case
+            try:
+                if base_path.samefile(Path.cwd()):
+                    continue
+            except Exception:
+                pass
+            # Files
+            for name in files:
+                fp = base_path / name
+                try:
+                    size = fp.stat().st_size
+                    if dry_run:
+                        deleted_files += 1
+                        deleted_bytes += size
+                    else:
+                        try:
+                            os.chmod(fp, 0o700)
+                        except Exception:
+                            pass
+                        try:
+                            fp.unlink(missing_ok=True)
+                            deleted_files += 1
+                            deleted_bytes += size
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+            # Dirs (remove only if empty and not dry-run)
+            if not dry_run:
+                for d in dirs:
+                    dp = base_path / d
+                    try:
+                        os.chmod(dp, 0o700)
+                        dp.rmdir()
+                        deleted_dirs += 1
+                    except Exception:
+                        continue
+        return deleted_files, deleted_dirs, deleted_bytes
+
+    def clean_temp(self):
+        dry = bool(self.var_dryrun.get())
+        aggr = bool(self.var_aggr.get())
+
+        self.status.configure(text=f"Cleaning temp files (dry={dry}, aggressive={aggr})...")
+        self.result_box.insert("end", f"\n[CLEAN] Mode: dry={dry}, aggressive={aggr}")
+        self.update_idletasks()
+
+        total_files = total_dirs = total_bytes = 0
+        paths = self._iter_temp_paths(aggressive=aggr)
+        if not paths:
+            self.result_box.insert("end", "\n[CLEAN] No temp directories found.")
+            self.status.configure(text="Done.")
+            return
+
+        # Show targets
+        self.result_box.insert("end", "\n[CLEAN] Targets:")
+        for p in paths:
+            self.result_box.insert("end", f"\n  - {p}")
+
+        # Purge
+        for p in paths:
+            try:
+                f, d, b = self._safe_purge_dir(p, dry_run=dry)
+                total_files += f
+                total_dirs += d
+                total_bytes += b
+            except Exception as e:
+                self.result_box.insert("end", f"\n[CLEAN] Skipped {p}: {e}")
+
+        action = "Would remove" if dry else "Removed"
+        self.result_box.insert("end", f"\n[CLEAN] {action} {total_files} files, {total_dirs} empty folders, ~{_format_bytes(total_bytes)}.")
+        self.status.configure(text="Temp cleanup complete.")
+
+    def exit_app(self):
+        self.result_box.insert("end", "\n[EXIT] Closing application...")
+        self.update()
+        time.sleep(0.5)
+        os._exit(0)
 
 if __name__ == "__main__":
     app = RAMProtector()
